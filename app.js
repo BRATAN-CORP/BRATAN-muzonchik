@@ -8,14 +8,18 @@
 
   // ---------- Public Piped API instances (rotated on failure) ----------
   const DEFAULT_INSTANCES = [
+    'https://api.piped.private.coffee',
     'https://pipedapi.kavin.rocks',
     'https://pipedapi.adminforge.de',
     'https://pipedapi.leptons.xyz',
     'https://pipedapi.smnz.de',
     'https://pipedapi.r4fo.com',
-    'https://api.piped.private.coffee',
     'https://pipedapi.drgns.space',
     'https://pipedapi.reallyaweso.me',
+    'https://pipedapi.ducks.party',
+    'https://pipedapi.ggtyler.dev',
+    'https://pipedapi.orangenet.cc',
+    'https://pipedapi.phoenixthrush.com',
   ];
 
   const LS_KEY_PLAYLIST = 'bratan:playlist:v1';
@@ -108,17 +112,32 @@
   }
 
   // ---------- Search ----------
-  // Returns items considered "official":
-  //   - uploader has verified badge (Official Artist Channel), OR
-  //   - uploader name ends with " - Topic" (auto-generated YouTube Music upload by labels)
-  function isOfficial(item) {
-    if (!item) return false;
-    const name = (item.uploaderName || '').trim();
-    if (!name) return false;
-    if (item.uploaderVerified === true) return true;
-    // Topic channels: "Artist - Topic" (auto-generated for label/YouTube Music releases)
-    if (/\s[-–—]\s?Topic$/i.test(name)) return true;
-    return false;
+  // We trust the Piped `filter=music_songs` endpoint — it maps to YouTube Music's
+  // "Songs" tab which is already curated to contain only official releases
+  // (Official Artist Channel uploads + auto-generated `Artist - Topic` tracks
+  //  from labels). No random user reuploads make it into that tab.
+  //
+  // On top of that, we aggressively filter out anything that *looks* like a
+  // reupload/cover/karaoke/sped-up/slowed/remix-by-fan using title heuristics.
+  // Not all Piped instances populate `uploaderVerified`, so we don't rely on it
+  // as a hard requirement — we just use it to render a ✓ badge when available.
+  const REUPLOAD_PATTERNS = [
+    /\breupload(ed)?\b/i,
+    /\bkaraoke\b/i,
+    /\bcover\b/i,
+    /\bsped\s*up\b/i,
+    /\bspedup\b/i,
+    /\bslowed\b/i,
+    /\breverb\b/i,
+    /\b8d\s*(audio|version)\b/i,
+    /\bnightcore\b/i,
+    /\bfan\s*(made|edit|remix)\b/i,
+    /\bmashup\b/i,
+    /\blyric(s)?\s*video\b/i,
+  ];
+  function looksLikeReupload(item) {
+    const t = (item.title || '') + ' ' + (item.artist || '');
+    return REUPLOAD_PATTERNS.some((re) => re.test(t));
   }
 
   function normalizeItem(it) {
@@ -186,15 +205,20 @@
     try {
       const raw = await searchPiped(q);
       const normalized = raw.map(normalizeItem).filter(Boolean);
-      const official = normalized.filter(isOfficial);
+      // YouTube Music `music_songs` filter is curated to official releases.
+      // We only filter out obvious reupload/cover/karaoke noise on top.
+      const official = normalized.filter((it) => !looksLikeReupload(it));
       state.results = official;
       renderResults();
+      const dropped = normalized.length - official.length;
       if (official.length === 0 && normalized.length > 0) {
-        setStatus('Официальных релизов не нашёл. Попробуй уточнить запрос (артист + трек).');
+        setStatus('Только перезаливы в выдаче — уточни запрос (артист + трек).');
       } else if (official.length === 0) {
         setStatus('Ничего не нашёл, бро.');
+      } else if (dropped > 0) {
+        setStatus(`Найдено: ${official.length} официальных · отсеял ${dropped} перезалив(а/ов).`);
       } else {
-        setStatus(`Найдено: ${official.length} (отфильтровал ${normalized.length - official.length} неофициальных).`);
+        setStatus(`Найдено: ${official.length} официальных треков.`);
       }
     } catch (e) {
       console.error(e);
