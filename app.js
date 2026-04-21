@@ -1,7 +1,10 @@
 // БРАТАН-музончик — бесплатный плеер на базе YouTube Music через публичные Piped-инстансы.
-// Вся музыка играет через официальный YouTube IFrame API, а поиск фильтруется
-// так, чтобы показывать только официальные релизы (верифицированные артисты или
-// авто-сгенерированные YouTube Music каналы "— Topic").
+// Поиск идёт через Piped `music_songs` (вкладка "Songs" в YouTube Music — уже курируется
+// и содержит только официальные релизы: Official Artist Channel + `Artist - Topic`).
+// Воспроизведение — НЕ через iframe (его лейблы массово блочат), а напрямую через
+// аудио-стримы Piped `/streams/{id}`. Мы выбираем самый жирный audioStream (обычно
+// Opus ~128-160 kbps из YouTube Music — это максимум без Premium) и отдаём его в
+// HTML `<audio>` тег. В отличие от iframe, эти стримы не подвержены embed-блокам.
 
 (() => {
   'use strict';
@@ -36,6 +39,8 @@
     results: $('#results'),
     playlist: $('#playlist'),
     statusLine: $('#statusLine'),
+    quality: $('#qualityBadge'),
+    audio: $('#audioEl'),
     nowThumb: $('#nowThumb'),
     nowTitle: $('#nowTitle'),
     nowArtist: $('#nowArtist'),
@@ -64,9 +69,8 @@
     isPlaying: false,
     loop: localStorage.getItem(LS_KEY_LOOP) === '1',
     volume: clampInt(parseInt(localStorage.getItem(LS_KEY_VOLUME) || '80', 10), 0, 100),
-    yt: null,             // YT.Player instance
-    ytReady: false,
-    pollTimer: null,
+    consecutiveErrors: 0,
+    currentReqToken: 0,   // generation token to cancel stale /streams fetches
   };
 
   // ---------- Helpers ----------
@@ -377,87 +381,100 @@
     });
   }
 
-  // ---------- YouTube player ----------
-  window.onYouTubeIframeAPIReady = function () {
-    const host = document.createElement('div');
-    host.id = 'yt-player';
-    document.getElementById('yt-host').appendChild(host);
-    state.yt = new YT.Player('yt-player', {
-      height: '1', width: '1',
-      playerVars: {
-        autoplay: 0, controls: 0, disablekb: 1, fs: 0,
-        iv_load_policy: 3, modestbranding: 1, playsinline: 1, rel: 0,
-      },
-      events: {
-        onReady: () => {
-          state.ytReady = true;
-          try { state.yt.setVolume(state.volume); } catch {}
-          els.volume.value = state.volume;
-          setRangeFill(els.volume);
-          updateLoopBtn();
-        },
-        onStateChange: (ev) => {
-          const S = YT.PlayerState;
-          if (ev.data === S.PLAYING) {
-            state.isPlaying = true;
-            state.consecutiveErrors = 0;
-            els.playBtn.textContent = '⏸';
-            startPoll();
-          } else if (ev.data === S.PAUSED) {
-            state.isPlaying = false;
-            els.playBtn.textContent = '▶';
-            stopPoll();
-          } else if (ev.data === S.ENDED) {
-            state.isPlaying = false;
-            els.playBtn.textContent = '▶';
-            stopPoll();
-            onTrackEnded();
-          } else if (ev.data === S.BUFFERING) {
-            // keep current button state
-          }
-        },
-        onError: (ev) => {
-          // 100/101/150 — embed disabled; 2 — bad id; 5 — html5 error
-          const blocked = ev && (ev.data === 101 || ev.data === 150 || ev.data === 100);
-          const title = els.nowTitle.textContent || 'трек';
-          setStatus(blocked
-            ? `Лейбл запретил встраивание «${title}». Переключаюсь дальше…`
-            : `Плеер споткнулся на «${title}». Переключаюсь дальше…`);
-          // Avoid tight infinite loop if every track fails
-          state.consecutiveErrors = (state.consecutiveErrors || 0) + 1;
-          if (state.consecutiveErrors > 8) {
-            setStatus('Много подряд запрещённых к встраиванию треков — останавливаюсь. Попробуй другой запрос.');
-            state.consecutiveErrors = 0;
-            return;
-          }
-          onTrackEnded();
-        },
-      },
+  // ---------- Audio player (direct streams, no iframe) ----------
+  function initAudio() {
+    els.audio.volume = state.volume / 100;
+    els.audio.addEventListener('play', () => {
+      state.isPlaying = true;
+      els.playBtn.textContent = '⏸';
     });
-  };
-
-  function startPoll() {
-    stopPoll();
-    state.pollTimer = setInterval(() => {
-      if (!state.yt || !state.ytReady) return;
-      try {
-        const cur = state.yt.getCurrentTime() || 0;
-        const dur = state.yt.getDuration() || 0;
-        els.curTime.textContent = fmtTime(cur);
+    els.audio.addEventListener('playing', () => {
+      state.isPlaying = true;
+      state.consecutiveErrors = 0;
+      els.playBtn.textContent = '⏸';
+    });
+    els.audio.addEventListener('pause', () => {
+      state.isPlaying = false;
+      els.playBtn.textContent = '▶';
+    });
+    els.audio.addEventListener('ended', () => {
+      state.isPlaying = false;
+      els.playBtn.textContent = '▶';
+      onTrackEnded();
+    });
+    els.audio.addEventListener('timeupdate', () => {
+      const cur = els.audio.currentTime || 0;
+      const dur = els.audio.duration || 0;
+      els.curTime.textContent = fmtTime(cur);
+      if (dur > 0 && isFinite(dur)) {
         els.durTime.textContent = fmtTime(dur);
-        if (dur > 0) {
-          const pct = (cur / dur) * 1000;
-          if (!els.seek._dragging) {
-            els.seek.value = Math.floor(pct);
-            setRangeFill(els.seek);
-          }
+        if (!els.seek._dragging) {
+          els.seek.value = Math.floor((cur / dur) * 1000);
+          setRangeFill(els.seek);
         }
-      } catch {}
-    }, 500);
+      }
+    });
+    els.audio.addEventListener('loadedmetadata', () => {
+      const dur = els.audio.duration || 0;
+      if (dur > 0 && isFinite(dur)) els.durTime.textContent = fmtTime(dur);
+    });
+    els.audio.addEventListener('error', () => {
+      onStreamError('Стрим отвалился');
+    });
+    updateLoopBtn();
   }
-  function stopPoll() { if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } }
 
-  function playItem(item, source) {
+  function onStreamError(reason) {
+    const title = els.nowTitle.textContent || 'трек';
+    setStatus(`${reason} на «${title}». Переключаюсь дальше…`);
+    state.consecutiveErrors++;
+    if (state.consecutiveErrors > 6) {
+      setStatus('Много подряд проблемных треков — останавливаюсь. Попробуй другой API сверху или другой запрос.');
+      state.consecutiveErrors = 0;
+      return;
+    }
+    onTrackEnded();
+  }
+
+  // Fetch highest-bitrate audio stream for a videoId. Tries the selected instance
+  // first, then falls back through the rest. Returns {url, bitrate, codec, mime, quality}.
+  async function fetchBestAudio(videoId) {
+    const instances = [state.instance, ...DEFAULT_INSTANCES.filter((i) => i !== state.instance)];
+    let lastErr = null;
+    for (const base of instances) {
+      try {
+        const res = await fetchWithTimeout(`${base}/streams/${encodeURIComponent(videoId)}`, 10000);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const streams = Array.isArray(data.audioStreams) ? data.audioStreams : [];
+        if (!streams.length) throw new Error('нет аудио-стримов');
+        // Prefer opus (better quality per bitrate), fall back to anything
+        const opus = streams.filter((s) => /opus/i.test(s.codec || '') || /opus/i.test(s.mimeType || ''));
+        const pool = opus.length ? opus : streams;
+        pool.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+        const best = pool[0];
+        if (!best || !best.url) throw new Error('нет URL у стрима');
+        // remember working instance for next time
+        if (base !== state.instance) {
+          state.instance = base;
+          localStorage.setItem(LS_KEY_INSTANCE, base);
+          els.instance.value = base;
+        }
+        return {
+          url: best.url,
+          bitrate: best.bitrate || 0,
+          codec: (best.codec || '').split('.')[0] || (best.mimeType || '').split('/')[1] || '',
+          mime: best.mimeType || '',
+          quality: best.quality || '',
+        };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('не нашёл аудио');
+  }
+
+  async function playItem(item, source) {
     state.currentId = item.id;
     state.currentSource = source;
     els.nowThumb.src = item.thumb || '';
@@ -466,15 +483,32 @@
     els.curTime.textContent = '0:00';
     els.durTime.textContent = item.duration ? fmtTime(item.duration) : '0:00';
     els.seek.value = 0; setRangeFill(els.seek);
+    els.quality.textContent = '';
     // highlight
     for (const li of document.querySelectorAll('.row.playing')) li.classList.remove('playing');
     renderResults(); renderPlaylist();
-    if (state.ytReady) {
-      try { state.yt.loadVideoById({ videoId: item.id }); } catch (e) { console.error(e); }
-    } else {
-      // queue: retry after ready
-      const retry = () => { if (state.ytReady) state.yt.loadVideoById({ videoId: item.id }); else setTimeout(retry, 200); };
-      retry();
+
+    // Cancel any in-flight stream fetch for a previous track
+    const token = ++state.currentReqToken;
+    setStatus(`Граблю аудио «${item.title}»…`);
+    try {
+      const stream = await fetchBestAudio(item.id);
+      if (token !== state.currentReqToken) return; // user moved on already
+      els.audio.src = stream.url;
+      els.audio.volume = state.volume / 100;
+      try { await els.audio.play(); } catch (e) {
+        // browser may block autoplay on the very first track without user gesture — but since
+        // playItem is called from a click handler this should work. If not, surface error.
+        onStreamError('Не удалось запустить'); return;
+      }
+      const kbps = stream.bitrate ? Math.round(stream.bitrate / 1000) : null;
+      const badge = [kbps ? `${kbps} kbps` : null, stream.codec || null].filter(Boolean).join(' · ');
+      els.quality.textContent = badge;
+      setStatus(`Играю «${item.title}» (${badge || 'авто'})`);
+    } catch (e) {
+      if (token !== state.currentReqToken) return;
+      console.error(e);
+      onStreamError('Не достал стрим');
     }
   }
 
@@ -524,16 +558,12 @@
     }
   }
   function togglePlay() {
-    if (!state.ytReady) return;
     if (!state.currentId) {
       if (state.playlist.length) playItem(state.playlist[0], 'playlist');
       return;
     }
-    try {
-      const st = state.yt.getPlayerState();
-      if (st === YT.PlayerState.PLAYING) state.yt.pauseVideo();
-      else state.yt.playVideo();
-    } catch {}
+    if (els.audio.paused) { els.audio.play().catch(() => {}); }
+    else els.audio.pause();
   }
   function updateLoopBtn() {
     els.loopBtn.classList.toggle('active', state.loop);
@@ -567,12 +597,10 @@
     });
     els.seek.addEventListener('change', () => {
       els.seek._dragging = false;
-      if (state.ytReady) {
-        try {
-          const dur = state.yt.getDuration() || 0;
-          const pct = parseInt(els.seek.value, 10) / 1000;
-          state.yt.seekTo(dur * pct, true);
-        } catch {}
+      const dur = els.audio.duration || 0;
+      if (dur > 0 && isFinite(dur)) {
+        const pct = parseInt(els.seek.value, 10) / 1000;
+        try { els.audio.currentTime = dur * pct; } catch {}
       }
     });
     els.volume.value = state.volume;
@@ -581,7 +609,7 @@
       state.volume = clampInt(els.volume.value, 0, 100);
       localStorage.setItem(LS_KEY_VOLUME, String(state.volume));
       setRangeFill(els.volume);
-      if (state.ytReady) { try { state.yt.setVolume(state.volume); } catch {} }
+      els.audio.volume = state.volume / 100;
     });
 
     // keyboard shortcuts
@@ -595,6 +623,7 @@
 
   // ---------- Boot ----------
   initInstanceSelect();
+  initAudio();
   wire();
   renderResults();
   renderPlaylist();
