@@ -400,6 +400,7 @@
           const S = YT.PlayerState;
           if (ev.data === S.PLAYING) {
             state.isPlaying = true;
+            state.consecutiveErrors = 0;
             els.playBtn.textContent = '⏸';
             startPoll();
           } else if (ev.data === S.PAUSED) {
@@ -417,7 +418,18 @@
         },
         onError: (ev) => {
           // 100/101/150 — embed disabled; 2 — bad id; 5 — html5 error
-          setStatus('Видео нельзя встроить. Пропускаю…');
+          const blocked = ev && (ev.data === 101 || ev.data === 150 || ev.data === 100);
+          const title = els.nowTitle.textContent || 'трек';
+          setStatus(blocked
+            ? `Лейбл запретил встраивание «${title}». Переключаюсь дальше…`
+            : `Плеер споткнулся на «${title}». Переключаюсь дальше…`);
+          // Avoid tight infinite loop if every track fails
+          state.consecutiveErrors = (state.consecutiveErrors || 0) + 1;
+          if (state.consecutiveErrors > 8) {
+            setStatus('Много подряд запрещённых к встраиванию треков — останавливаюсь. Попробуй другой запрос.');
+            state.consecutiveErrors = 0;
+            return;
+          }
           onTrackEnded();
         },
       },
@@ -466,31 +478,47 @@
     }
   }
 
+  function currentList() {
+    if (state.currentSource === 'playlist') return state.playlist;
+    if (state.currentSource === 'results') return state.results;
+    return [];
+  }
+
   function onTrackEnded() {
-    if (state.currentSource !== 'playlist' || !state.playlist.length) return;
-    const idx = state.playlist.findIndex((x) => x.id === state.currentId);
+    const list = currentList();
+    if (!list.length) return;
+    const idx = list.findIndex((x) => x.id === state.currentId);
     if (idx < 0) return;
     let nextIdx = idx + 1;
-    if (nextIdx >= state.playlist.length) {
-      if (state.loop) nextIdx = 0; else return;
+    if (nextIdx >= list.length) {
+      if (state.loop && state.currentSource === 'playlist') nextIdx = 0;
+      else return;
     }
-    playItem(state.playlist[nextIdx], 'playlist');
+    playItem(list[nextIdx], state.currentSource);
   }
 
   function playPrev() {
-    if (state.currentSource === 'playlist' && state.playlist.length) {
-      const idx = state.playlist.findIndex((x) => x.id === state.currentId);
+    const list = currentList();
+    if (list.length && state.currentId) {
+      const idx = list.findIndex((x) => x.id === state.currentId);
       let prev = idx - 1;
-      if (prev < 0) prev = state.loop ? state.playlist.length - 1 : 0;
-      playItem(state.playlist[prev], 'playlist');
+      if (prev < 0) {
+        prev = (state.loop && state.currentSource === 'playlist') ? list.length - 1 : 0;
+      }
+      playItem(list[prev], state.currentSource);
+    } else if (state.playlist.length) {
+      playItem(state.playlist[0], 'playlist');
     }
   }
   function playNext() {
-    if (state.currentSource === 'playlist' && state.playlist.length) {
-      const idx = state.playlist.findIndex((x) => x.id === state.currentId);
+    const list = currentList();
+    if (list.length && state.currentId) {
+      const idx = list.findIndex((x) => x.id === state.currentId);
       let next = idx + 1;
-      if (next >= state.playlist.length) next = state.loop ? 0 : state.playlist.length - 1;
-      playItem(state.playlist[next], 'playlist');
+      if (next >= list.length) {
+        next = (state.loop && state.currentSource === 'playlist') ? 0 : list.length - 1;
+      }
+      playItem(list[next], state.currentSource);
     } else if (state.playlist.length) {
       playItem(state.playlist[0], 'playlist');
     }
