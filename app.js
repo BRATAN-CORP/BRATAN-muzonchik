@@ -459,6 +459,16 @@
         }
       }
     });
+    els.audio.addEventListener('loadedmetadata', () => {
+      if (state.currentItem && state.currentItem.source !== SOURCES.SC) return;
+      const dur = els.audio.duration || 0;
+      if (dur > 0 && isFinite(dur)) els.durTime.textContent = fmtTime(dur);
+    });
+    els.audio.addEventListener('error', () => {
+      // YouTube ошибки идут через YT IFrame onError; здесь ловим только SC.
+      if (state.currentItem && state.currentItem.source !== SOURCES.SC) return;
+      onStreamError('Стрим отвалился');
+    });
   }
 
   function teardownHls() {

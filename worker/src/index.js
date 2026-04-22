@@ -18,8 +18,8 @@ const SC_ORIGIN = "https://api-v2.soundcloud.com";
 const SC_HLS_ALLOWED_HOSTS = [/^(.+\.)?sndcdn\.com$/i];
 const YT_AUDIO_ALLOWED_HOSTS = [
   /^(.+\.)?googlevideo\.com$/i,
-  /^pipedproxy\..+$/i,
-  /^.+-proxy\..+$/i,  // e.g. proxy.piped.XYZ
+  /^pipedproxy\..+$/i,          // e.g. pipedproxy.kavin.rocks, pipedproxy.adminforge.de
+  /^proxy\.piped\..+$/i,         // e.g. proxy.piped.private.coffee, proxy.piped.projectsegfau.lt
 ];
 const CLIENT_ID_REGEX = /client_id[:=]"([A-Za-z0-9]{32})"/;
 const CLIENT_ID_CACHE_KEY = "https://bratan.internal/client-id";
