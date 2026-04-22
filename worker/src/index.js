@@ -1,6 +1,13 @@
 // bratan-muzonchik Cloudflare Worker
-// Proxies SoundCloud + Piped (YouTube) APIs and adds CORS headers so the
-// static GitHub Pages frontend can call it directly from the browser.
+// Proxies SoundCloud + Piped (YouTube) + Tidal APIs and adds CORS headers so
+// the static GitHub Pages frontend can call it directly from the browser.
+import {
+  handleTidalHealth,
+  handleTidalSearch,
+  handleTidalTrack,
+  handleTidalAudio,
+  handleTidalDownload,
+} from "./tidal.js";
 //
 // Endpoints:
 //   GET  /search?q=<query>&limit=<n>       -> SoundCloud /search/tracks JSON
@@ -367,6 +374,16 @@ export default {
         resp = await handleYtStreams(url, url);
       } else if (url.pathname === "/ytaudio") {
         resp = await handleYtAudio(url, request);
+      } else if (url.pathname === "/tidal/health") {
+        resp = await handleTidalHealth(env, ctx);
+      } else if (url.pathname === "/tidal/search") {
+        resp = await handleTidalSearch(url, env, ctx);
+      } else if (url.pathname === "/tidal/track") {
+        resp = await handleTidalTrack(url, env, ctx);
+      } else if (url.pathname === "/tidal/audio") {
+        resp = await handleTidalAudio(url, request);
+      } else if (url.pathname === "/tidal/download") {
+        resp = await handleTidalDownload(url, request, env, ctx);
       } else {
         resp = json({ error: "not found" }, 404);
       }

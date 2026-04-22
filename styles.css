@@ -160,6 +160,8 @@ select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,61,11
 .row .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-actions { display: flex; gap: 6px; }
 .row-actions button { padding: 6px 10px; }
+.row-actions .dl { background: linear-gradient(135deg, #1db954, #0a8f3f); color: #fff; font-weight: 700; }
+.row-actions .dl:hover { filter: brightness(1.15); }
 .handle {
   cursor: grab; user-select: none; color: var(--muted); padding: 0 6px;
 }
