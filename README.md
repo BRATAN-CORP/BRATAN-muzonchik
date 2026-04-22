@@ -5,24 +5,25 @@
 
 ## Что под капотом
 
-- **Источник музыки** — YouTube Music через публичные [Piped](https://github.com/TeamPiped/Piped) API инстансы.
-  Никаких ключей, никакого логина.
-- **Плеер** — официальный [YouTube IFrame API](https://developers.google.com/youtube/iframe_api_reference)
-  (iframe спрятан, работает как аудио-плеер).
-- **Только официал** — запрос идёт в YouTube Music-раздел «Songs» (`filter=music_songs`),
-  который уже курируется самим YouTube Music и содержит только официальные релизы:
-  заливки с Official Artist Channel артистов + авто-сгенерированные `Artist — Topic`
-  дорожки, которые YouTube генерирует из релизов лейблов. Поверх мы ещё отсеиваем
-  очевидные кавер-/караоке-/slowed+reverb/lyric-video/sped up/nightcore-переливы по названию.
-  Там, где Piped отдаёт флаг `uploaderVerified`, рядом с артистом появляется галочка ✓;
-  у Topic-дорожек — значок ♪.
-- **Плейлист** — сохраняется в `localStorage` твоего браузера. Можно экспортировать в JSON и импортировать назад.
-- **Фронт** — ванильный HTML/CSS/JS без сборки, без зависимостей.
+- **Источник музыки** — публичный SoundCloud API v2 (`api-v2.soundcloud.com`).
+  Никаких ключей, никакого логина — `client_id` скрэпится c главной страницы
+  `soundcloud.com` (встроен в сборку).
+- **Плеер** — нативный `<audio>` + [hls.js](https://github.com/video-dev/hls.js)
+  для HLS-стримов. Формат: plain-HLS MP3 128 kbps (без DRM). На Safari/iOS HLS
+  играется нативно, hls.js не грузится.
+- **Только официал** — пропускаем трек только если:
+    1. автор верифицирован (синяя галочка SoundCloud), ИЛИ
+    2. у трека заполнен `publisher_metadata.artist/album/isrc` — т.е. релиз через лейбл;
+  плюс жёсткий словарь отсева (cover, karaoke, sped up, slowed, nightcore, remix,
+  mashup, fan edit, lyric video, instrumental, acapella, type beat и т.д.).
+  Рядом с верифицированными артистами — галочка ✓.
+- **Плейлист** — сохраняется в `localStorage` твоего браузера. Можно
+  экспортировать в JSON и импортировать назад.
+- **Фронт** — ванильный HTML/CSS/JS без сборки, без своего бэкенда.
 
 ## Фичи
 
-- Поиск с автоматическим fallback на другие Piped-инстансы если текущий упал.
-- Переключатель инстансов в верхнем правом углу.
+- Поиск по SoundCloud с автоматическим отсевом неофициальных треков.
 - Управление: play/pause, next/prev, seek, громкость, повтор плейлиста (🔁), перемешать (🔀).
 - Перетаскивание треков в плейлисте для смены порядка (за ручку `≡`).
 - Импорт/экспорт плейлиста в JSON.
@@ -45,8 +46,25 @@ Workflow: [.github/workflows/pages.yml](.github/workflows/pages.yml).
 
 ## Оговорки
 
-- Если Piped-инстанс упал — переключи его в селекторе сверху. Список публичных инстансов:
-  https://github.com/TeamPiped/documentation/blob/main/content/docs/public-instances/index.md
-- Воспроизведение идёт через YouTube — соответственно, трек может быть недоступен,
-  если правообладатель заблокировал embedding. Такие треки пропускаются автоматически.
+- SoundCloud `client_id` периодически ротируется (раз в несколько месяцев). Если поиск
+  вдруг начнёт отдавать 401 — нужно выдернуть новый id из JS-бандла на https://soundcloud.com
+  и добавить в массив `SC_CLIENT_IDS` в [app.js](app.js).
+- Качество — 128 kbps MP3 (единственный вариант без DRM у SoundCloud публично).
+  160 kbps AAC у SoundCloud идёт с FairPlay-шифрованием (`cbc-encrypted-hls`),
+  который в браузере проиграть нельзя.
+- Не все артисты есть на SoundCloud — если нужного трека там нет, поиск
+  вернёт пусто. Коверэйдж для мейнстрима (Weeknd, Drake, Dua Lipa, Taylor Swift,
+  Billie Eilish, Post Malone, Kendrick Lamar, Daft Punk и т.д.) почти полный.
 - Это клиент-сайд плеер. Никакие твои плейлисты никуда не уходят — всё в `localStorage` твоего браузера.
+
+## История источников
+
+В ветке `main` до коммита `e7e97e9` источником был YouTube Music через
+[Piped](https://github.com/TeamPiped/Piped). Пришлось мигрировать на SoundCloud
+потому что:
+1. Почти все публичные Piped-инстансы остановили анонимный API или не отдают CORS.
+2. Единственный оставшийся CORS-friendly инстанс (`api.piped.private.coffee`)
+   упёрся в YouTube-шный `SignInConfirmNotBotException` — YouTube забанил его IP
+   за анонимные запросы к `/watch`.
+3. YouTube IFrame Player на мейджор-лейбле блочит embedding у большинства хитов
+   (The Weeknd, Daft Punk, Drake и т.д.), что ломает fallback-план.

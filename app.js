@@ -1,41 +1,39 @@
-// БРАТАН-музончик — бесплатный плеер на базе YouTube Music через публичные Piped-инстансы.
-// Поиск идёт через Piped `music_songs` (вкладка "Songs" в YouTube Music — уже курируется
-// и содержит только официальные релизы: Official Artist Channel + `Artist - Topic`).
-// Воспроизведение — НЕ через iframe (его лейблы массово блочат), а напрямую через
-// аудио-стримы Piped `/streams/{id}`. Мы выбираем самый жирный audioStream (обычно
-// Opus ~128-160 kbps из YouTube Music — это максимум без Premium) и отдаём его в
-// HTML `<audio>` тег. В отличие от iframe, эти стримы не подвержены embed-блокам.
+// БРАТАН-музончик — бесплатный музыкальный плеер на базе SoundCloud.
+// Выбор источника: SoundCloud, потому что:
+//   1) CORS открыт со всех доменов — статический сайт на GitHub Pages достучится напрямую,
+//      без прокси, без бэкенда, без VPS.
+//   2) У большинства крупных артистов есть официальные верифицированные аккаунты
+//      (Weeknd, Drake, Dua Lipa, Billie Eilish, Daft Punk, Taylor Swift и т.д.),
+//      плюс `publisher_metadata` с лейблом/ISRC у лейбловых релизов.
+//   3) Стрим — plain HLS MP3 128 kbps (без DRM), играется через hls.js в любом браузере.
+// Альтернативные варианты (YouTube/Piped/Invidious) мы проверили — они все уперлись
+// в бот-блок YouTube или отсутствие CORS у публичных инстансов.
+//
+// Официал-фильтр: берём только tracks с verified-артиста ИЛИ с заполненным
+// `publisher_metadata.artist` (т.е. это релиз через лейбл), плюс режем по словарю
+// cover/karaoke/sped up/slowed/nightcore/mashup/fan edit/lyric video/etc.
 
 (() => {
   'use strict';
 
-  // ---------- Public Piped API instances (rotated on failure) ----------
-  const DEFAULT_INSTANCES = [
-    'https://api.piped.private.coffee',
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.adminforge.de',
-    'https://pipedapi.leptons.xyz',
-    'https://pipedapi.smnz.de',
-    'https://pipedapi.r4fo.com',
-    'https://pipedapi.drgns.space',
-    'https://pipedapi.reallyaweso.me',
-    'https://pipedapi.ducks.party',
-    'https://pipedapi.ggtyler.dev',
-    'https://pipedapi.orangenet.cc',
-    'https://pipedapi.phoenixthrush.com',
+  // SoundCloud public web client_id (скрэпится с главной страницы soundcloud.com).
+  // Иногда ротируется — если выдача внезапно отдаёт 401, значит нужно обновить.
+  // Запасные id можно добавить в массив ниже — при 401 на первом идём по очереди.
+  const SC_CLIENT_IDS = [
+    'fAhkTpQg5TX1uwXLQ7FyuPFH81D360jK',
   ];
+  const SC_API = 'https://api-v2.soundcloud.com';
 
-  const LS_KEY_PLAYLIST = 'bratan:playlist:v1';
-  const LS_KEY_INSTANCE = 'bratan:instance:v1';
+  const LS_KEY_PLAYLIST = 'bratan:playlist:v2';
   const LS_KEY_VOLUME = 'bratan:volume:v1';
   const LS_KEY_LOOP = 'bratan:loop:v1';
+  const LS_KEY_CLIENT_ID = 'bratan:sc_client_id:v1';
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
   const els = {
     search: $('#search'),
     searchBtn: $('#searchBtn'),
-    instance: $('#instance'),
     results: $('#results'),
     playlist: $('#playlist'),
     statusLine: $('#statusLine'),
@@ -61,16 +59,17 @@
 
   // ---------- State ----------
   const state = {
-    instance: localStorage.getItem(LS_KEY_INSTANCE) || DEFAULT_INSTANCES[0],
-    results: [],          // {id, title, artist, thumb, duration}
+    clientId: localStorage.getItem(LS_KEY_CLIENT_ID) || SC_CLIENT_IDS[0],
+    results: [],
     playlist: loadPlaylist(),
-    currentId: null,      // id currently loaded in YT
-    currentSource: null,  // 'playlist' | 'results'
+    currentId: null,         // SoundCloud track id (number) of currently-loaded track
+    currentSource: null,     // 'playlist' | 'results'
     isPlaying: false,
     loop: localStorage.getItem(LS_KEY_LOOP) === '1',
     volume: clampInt(parseInt(localStorage.getItem(LS_KEY_VOLUME) || '80', 10), 0, 100),
     consecutiveErrors: 0,
-    currentReqToken: 0,   // generation token to cancel stale /streams fetches
+    currentReqToken: 0,      // cancels stale stream-resolve fetches when the user jumps tracks
+    hls: null,               // active Hls.js instance (if any)
   };
 
   // ---------- Helpers ----------
@@ -95,138 +94,134 @@
       if (!raw) return [];
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr)) return [];
-      return arr.filter((x) => x && typeof x.id === 'string');
+      return arr.filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string'));
     } catch { return []; }
   }
-
-  // ---------- Instance selector ----------
-  function initInstanceSelect() {
-    els.instance.innerHTML = '';
-    for (const url of DEFAULT_INSTANCES) {
-      const opt = document.createElement('option');
-      opt.value = url;
-      opt.textContent = url.replace(/^https?:\/\//, '');
-      if (url === state.instance) opt.selected = true;
-      els.instance.appendChild(opt);
-    }
-    els.instance.addEventListener('change', () => {
-      state.instance = els.instance.value;
-      localStorage.setItem(LS_KEY_INSTANCE, state.instance);
-    });
-  }
-
-  // ---------- Search ----------
-  // We trust the Piped `filter=music_songs` endpoint — it maps to YouTube Music's
-  // "Songs" tab which is already curated to contain only official releases
-  // (Official Artist Channel uploads + auto-generated `Artist - Topic` tracks
-  //  from labels). No random user reuploads make it into that tab.
-  //
-  // On top of that, we aggressively filter out anything that *looks* like a
-  // reupload/cover/karaoke/sped-up/slowed/remix-by-fan using title heuristics.
-  // Not all Piped instances populate `uploaderVerified`, so we don't rely on it
-  // as a hard requirement — we just use it to render a ✓ badge when available.
-  const REUPLOAD_PATTERNS = [
-    /\breupload(ed)?\b/i,
-    /\bkaraoke\b/i,
-    /\bcover\b/i,
-    /\bsped\s*up\b/i,
-    /\bspedup\b/i,
-    /\bslowed\b/i,
-    /\breverb\b/i,
-    /\b8d\s*(audio|version)\b/i,
-    /\bnightcore\b/i,
-    /\bfan\s*(made|edit|remix)\b/i,
-    /\bmashup\b/i,
-    /\blyric(s)?\s*video\b/i,
-  ];
-  function looksLikeReupload(item) {
-    const t = (item.title || '') + ' ' + (item.artist || '');
-    return REUPLOAD_PATTERNS.some((re) => re.test(t));
-  }
-
-  function normalizeItem(it) {
-    // Piped returns url like "/watch?v=ID"
-    let id = null;
-    if (typeof it.url === 'string') {
-      const m = it.url.match(/[?&]v=([\w-]{6,})/);
-      if (m) id = m[1];
-    }
-    if (!id && typeof it.videoId === 'string') id = it.videoId;
-    if (!id) return null;
-    const thumbs = Array.isArray(it.thumbnails) ? it.thumbnails : null;
-    let thumb = it.thumbnail || (thumbs && thumbs[0] && thumbs[0].url) || `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
-    if (thumb && thumb.startsWith('//')) thumb = 'https:' + thumb;
-    const rawArtist = (it.uploaderName || '').trim();
-    const artist = rawArtist.replace(/\s[-–—]\s?Topic$/i, '').trim() || rawArtist;
-    const duration = typeof it.duration === 'number' ? it.duration : null;
-    return {
-      id,
-      title: (it.title || '').trim() || '(без названия)',
-      artist: artist || 'Неизвестный исполнитель',
-      thumb,
-      duration,
-      verified: it.uploaderVerified === true,
-      topic: /\s[-–—]\s?Topic$/i.test(rawArtist),
-    };
-  }
-
-  async function searchPiped(query) {
-    const instances = [state.instance, ...DEFAULT_INSTANCES.filter((i) => i !== state.instance)];
-    let lastErr = null;
-    for (const base of instances) {
-      try {
-        setStatus(`Ищу на ${base.replace(/^https?:\/\//, '')}…`);
-        const res = await fetchWithTimeout(`${base}/search?q=${encodeURIComponent(query)}&filter=music_songs`, 9000);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const items = Array.isArray(data.items) ? data.items : [];
-        // if this instance worked, stick with it
-        if (base !== state.instance) {
-          state.instance = base;
-          localStorage.setItem(LS_KEY_INSTANCE, base);
-          els.instance.value = base;
-        }
-        return items;
-      } catch (e) {
-        lastErr = e;
-        // try next
-      }
-    }
-    throw lastErr || new Error('Все инстансы недоступны');
-  }
-
   function fetchWithTimeout(url, ms) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     return fetch(url, { signal: ctrl.signal, mode: 'cors' }).finally(() => clearTimeout(t));
   }
 
+  // ---------- Official-only filter ----------
+  // SoundCloud позволяет кому угодно залить перезалив/ускоренку/ремикс — фильтруем
+  // жёстче чем Piped. На вход попадает уже нормализованный item.
+  const REUPLOAD_PATTERNS = [
+    /\breupload(ed)?\b/i,
+    /\bkaraoke\b/i,
+    /\bcover\b/i,
+    /\bsped\s*up\b/i, /\bspedup\b/i,
+    /\bslowed\b/i,
+    /\breverb\b/i,
+    /\b8d\s*(audio|version)\b/i,
+    /\bnightcore\b/i,
+    /\bfan\s*(made|edit|remix|version)\b/i,
+    /\bmashup\b/i,
+    /\blyric(s)?\s*video\b/i,
+    /\bremix\b/i,              // все ремиксы — мимо официала
+    /\binstrumental\b/i,
+    /\bacapella\b/i, /\ba\s*capella\b/i,
+    /\btype\s*beat\b/i,
+    /\bfull\s*album\b/i,
+  ];
+  function looksLikeReupload(title, artist) {
+    const t = (title || '') + ' ' + (artist || '');
+    return REUPLOAD_PATTERNS.some((re) => re.test(t));
+  }
+
+  function isOfficialSCTrack(tr) {
+    if (!tr || tr.kind !== 'track') return false;
+    if (tr.state !== 'finished') return false;
+    if (tr.streamable === false) return false;
+    if (tr.sharing && tr.sharing !== 'public') return false;
+    const user = tr.user || {};
+    const pm = tr.publisher_metadata || null;
+    const verified = user.verified === true;
+    // publisher_metadata с artist/label означает релиз через лейбл (даже если аккаунт
+    // сам не верифицирован — типа Rick Astley's own "Remastered 2022" uploads).
+    const hasPublisherReleaseInfo = !!(pm && (pm.artist || pm.album_title || pm.isrc));
+    if (!verified && !hasPublisherReleaseInfo) return false;
+    if (looksLikeReupload(tr.title, user.username)) return false;
+    // Нужен HLS MP3 транскодинг (не DRM-зашифрованный AAC)
+    if (!pickHlsMp3Transcoding(tr)) return false;
+    return true;
+  }
+
+  function pickHlsMp3Transcoding(tr) {
+    const list = (tr && tr.media && Array.isArray(tr.media.transcodings)) ? tr.media.transcodings : [];
+    // Plain HLS MP3 — без DRM, играется через hls.js
+    return list.find((t) => {
+      const fmt = t.format || {};
+      return fmt.protocol === 'hls' && fmt.mime_type === 'audio/mpeg';
+    }) || null;
+  }
+
+  function normalizeSCTrack(tr) {
+    const user = tr.user || {};
+    const pm = tr.publisher_metadata || {};
+    const artist = (pm.artist || user.username || 'Неизвестный исполнитель').trim();
+    let thumb = tr.artwork_url || user.avatar_url || '';
+    // в SC часто отдают "-large" (100x100) — заменим на "-t300x300" если шаблон совпал
+    if (thumb) thumb = thumb.replace(/-large(\.[a-z]+)$/i, '-t300x300$1');
+    return {
+      id: tr.id,                                    // numeric SoundCloud track id
+      urn: tr.urn || `soundcloud:tracks:${tr.id}`,
+      title: (tr.title || '').trim() || '(без названия)',
+      artist,
+      thumb,
+      duration: tr.duration ? Math.round(tr.duration / 1000) : null,  // SC duration is ms
+      verified: (user.verified === true),
+      permalink: tr.permalink_url || '',
+      transcoding: pickHlsMp3Transcoding(tr)?.url || null,
+    };
+  }
+
+  // ---------- Search ----------
+  async function searchSoundCloud(query) {
+    const clientIds = [state.clientId, ...SC_CLIENT_IDS.filter((c) => c !== state.clientId)];
+    let lastErr = null;
+    for (const cid of clientIds) {
+      try {
+        const url = `${SC_API}/search/tracks?q=${encodeURIComponent(query)}&client_id=${encodeURIComponent(cid)}&limit=40`;
+        const res = await fetchWithTimeout(url, 10000);
+        if (res.status === 401 || res.status === 403) throw new Error('client_id устарел');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (cid !== state.clientId) {
+          state.clientId = cid;
+          localStorage.setItem(LS_KEY_CLIENT_ID, cid);
+        }
+        return Array.isArray(data.collection) ? data.collection : [];
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('SoundCloud недоступен');
+  }
+
   async function runSearch() {
     const q = els.search.value.trim();
     if (!q) return;
     els.results.innerHTML = '';
-    setStatus('Ищу…');
+    setStatus('Ищу официал на SoundCloud…');
     try {
-      const raw = await searchPiped(q);
-      const normalized = raw.map(normalizeItem).filter(Boolean);
-      // YouTube Music `music_songs` filter is curated to official releases.
-      // We only filter out obvious reupload/cover/karaoke noise on top.
-      const official = normalized.filter((it) => !looksLikeReupload(it));
+      const raw = await searchSoundCloud(q);
+      const official = raw.filter(isOfficialSCTrack).map(normalizeSCTrack);
       state.results = official;
       renderResults();
-      const dropped = normalized.length - official.length;
-      if (official.length === 0 && normalized.length > 0) {
-        setStatus('Только перезаливы в выдаче — уточни запрос (артист + трек).');
+      const dropped = raw.length - official.length;
+      if (official.length === 0 && raw.length > 0) {
+        setStatus('Нашёл только перезаливы/каверы — уточни запрос (артист + трек).');
       } else if (official.length === 0) {
         setStatus('Ничего не нашёл, бро.');
       } else if (dropped > 0) {
-        setStatus(`Найдено: ${official.length} официальных · отсеял ${dropped} перезалив(а/ов).`);
+        setStatus(`Найдено: ${official.length} официальных · отсеял ${dropped} не-официальных.`);
       } else {
         setStatus(`Найдено: ${official.length} официальных треков.`);
       }
     } catch (e) {
       console.error(e);
-      setStatus('Поиск не удался. Переключи API в правом верхнем углу и попробуй ещё раз.');
+      setStatus('Поиск не удался: ' + (e && e.message ? e.message : 'сеть'));
     }
   }
 
@@ -262,7 +257,7 @@
     state.playlist.forEach((item, idx) => {
       const node = tpl.content.firstElementChild.cloneNode(true);
       fillRow(node, item);
-      node.dataset.id = item.id;
+      node.dataset.id = String(item.id);
       node.dataset.index = String(idx);
       node.querySelector('.play').addEventListener('click', () => playItem(item, 'playlist'));
       node.querySelector('.remove').addEventListener('click', (ev) => {
@@ -278,12 +273,12 @@
 
   function fillRow(node, item) {
     const img = node.querySelector('.thumb');
-    img.src = item.thumb;
+    img.src = item.thumb || '';
     img.loading = 'lazy';
     img.alt = '';
     node.querySelector('.title').textContent = item.title;
     const durStr = item.duration ? ' · ' + fmtTime(item.duration) : '';
-    const badge = item.verified ? ' ✓' : (item.topic ? ' ♪' : '');
+    const badge = item.verified ? ' ✓' : '';
     node.querySelector('.sub').textContent = item.artist + badge + durStr;
   }
 
@@ -294,9 +289,15 @@
       return;
     }
     state.playlist.push({
-      id: item.id, title: item.title, artist: item.artist,
-      thumb: item.thumb, duration: item.duration || null,
-      verified: !!item.verified, topic: !!item.topic,
+      id: item.id,
+      urn: item.urn,
+      title: item.title,
+      artist: item.artist,
+      thumb: item.thumb,
+      duration: item.duration || null,
+      verified: !!item.verified,
+      permalink: item.permalink || '',
+      transcoding: item.transcoding || null,
     });
     savePlaylist();
     renderPlaylist();
@@ -344,8 +345,7 @@
       try {
         const arr = JSON.parse(reader.result);
         if (!Array.isArray(arr)) throw new Error('not array');
-        const clean = arr.filter((x) => x && typeof x.id === 'string' && typeof x.title === 'string');
-        // merge: existing first, then new items not already present
+        const clean = arr.filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string') && typeof x.title === 'string');
         const seen = new Set(state.playlist.map((x) => x.id));
         for (const it of clean) if (!seen.has(it.id)) { state.playlist.push(it); seen.add(it.id); }
         savePlaylist();
@@ -381,7 +381,7 @@
     });
   }
 
-  // ---------- Audio player (direct streams, no iframe) ----------
+  // ---------- Audio player ----------
   function initAudio() {
     els.audio.volume = state.volume / 100;
     els.audio.addEventListener('play', () => {
@@ -429,49 +429,54 @@
     setStatus(`${reason} на «${title}». Переключаюсь дальше…`);
     state.consecutiveErrors++;
     if (state.consecutiveErrors > 6) {
-      setStatus('Много подряд проблемных треков — останавливаюсь. Попробуй другой API сверху или другой запрос.');
+      setStatus('Много подряд проблемных треков — притормозил. Попробуй другой запрос.');
       state.consecutiveErrors = 0;
       return;
     }
     onTrackEnded();
   }
 
-  // Fetch highest-bitrate audio stream for a videoId. Tries the selected instance
-  // first, then falls back through the rest. Returns {url, bitrate, codec, mime, quality}.
-  async function fetchBestAudio(videoId) {
-    const instances = [state.instance, ...DEFAULT_INSTANCES.filter((i) => i !== state.instance)];
-    let lastErr = null;
-    for (const base of instances) {
-      try {
-        const res = await fetchWithTimeout(`${base}/streams/${encodeURIComponent(videoId)}`, 10000);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const streams = Array.isArray(data.audioStreams) ? data.audioStreams : [];
-        if (!streams.length) throw new Error('нет аудио-стримов');
-        // Prefer opus (better quality per bitrate), fall back to anything
-        const opus = streams.filter((s) => /opus/i.test(s.codec || '') || /opus/i.test(s.mimeType || ''));
-        const pool = opus.length ? opus : streams;
-        pool.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-        const best = pool[0];
-        if (!best || !best.url) throw new Error('нет URL у стрима');
-        // remember working instance for next time
-        if (base !== state.instance) {
-          state.instance = base;
-          localStorage.setItem(LS_KEY_INSTANCE, base);
-          els.instance.value = base;
-        }
-        return {
-          url: best.url,
-          bitrate: best.bitrate || 0,
-          codec: (best.codec || '').split('.')[0] || (best.mimeType || '').split('/')[1] || '',
-          mime: best.mimeType || '',
-          quality: best.quality || '',
-        };
-      } catch (e) {
-        lastErr = e;
-      }
+  function teardownHls() {
+    if (state.hls) {
+      try { state.hls.destroy(); } catch {}
+      state.hls = null;
     }
-    throw lastErr || new Error('не нашёл аудио');
+  }
+
+  // Resolve SoundCloud HLS playlist URL from a transcoding endpoint, then hand it
+  // to hls.js (or native <audio> on Safari).
+  async function resolveSCStream(transcodingUrl) {
+    const url = transcodingUrl + (transcodingUrl.includes('?') ? '&' : '?') + 'client_id=' + encodeURIComponent(state.clientId);
+    const res = await fetchWithTimeout(url, 10000);
+    if (!res.ok) throw new Error('stream resolve HTTP ' + res.status);
+    const data = await res.json();
+    if (!data || !data.url) throw new Error('нет m3u8 url');
+    return data.url;
+  }
+
+  function attachPlaylistUrl(m3u8Url) {
+    teardownHls();
+    const Hls = window.Hls;
+    if (Hls && Hls.isSupported()) {
+      const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
+      state.hls = hls;
+      hls.loadSource(m3u8Url);
+      hls.attachMedia(els.audio);
+      hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (data && data.fatal) onStreamError('HLS fatal: ' + (data.details || data.type || ''));
+      });
+      return new Promise((resolve, reject) => {
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          els.audio.play().then(resolve).catch(reject);
+        });
+      });
+    }
+    // Safari / iOS поддерживает HLS нативно
+    if (els.audio.canPlayType('application/vnd.apple.mpegurl')) {
+      els.audio.src = m3u8Url;
+      return els.audio.play();
+    }
+    throw new Error('браузер не умеет HLS');
   }
 
   async function playItem(item, source) {
@@ -484,32 +489,48 @@
     els.durTime.textContent = item.duration ? fmtTime(item.duration) : '0:00';
     els.seek.value = 0; setRangeFill(els.seek);
     els.quality.textContent = '';
-    // highlight
     for (const li of document.querySelectorAll('.row.playing')) li.classList.remove('playing');
     renderResults(); renderPlaylist();
 
-    // Cancel any in-flight stream fetch for a previous track
     const token = ++state.currentReqToken;
     setStatus(`Граблю аудио «${item.title}»…`);
     try {
-      const stream = await fetchBestAudio(item.id);
-      if (token !== state.currentReqToken) return; // user moved on already
-      els.audio.src = stream.url;
-      els.audio.volume = state.volume / 100;
-      try { await els.audio.play(); } catch (e) {
-        // browser may block autoplay on the very first track without user gesture — but since
-        // playItem is called from a click handler this should work. If not, surface error.
+      let transcoding = item.transcoding;
+      // Если плейлист был импортирован со старой версии — transcoding мог не сохраниться.
+      // Попробуем дёрнуть track по id заново.
+      if (!transcoding) {
+        const tr = await refetchTrack(item.id);
+        if (token !== state.currentReqToken) return;
+        const pick = pickHlsMp3Transcoding(tr);
+        if (!pick) throw new Error('у трека нет plain-HLS (DRM)');
+        transcoding = pick.url;
+        // запишем в playlist чтобы в следующий раз было быстрее
+        const pi = state.playlist.find((x) => x.id === item.id);
+        if (pi) { pi.transcoding = transcoding; savePlaylist(); }
+      }
+      const m3u8 = await resolveSCStream(transcoding);
+      if (token !== state.currentReqToken) return;
+      try {
+        await attachPlaylistUrl(m3u8);
+      } catch (e) {
+        if (token !== state.currentReqToken) return;
         onStreamError('Не удалось запустить'); return;
       }
-      const kbps = stream.bitrate ? Math.round(stream.bitrate / 1000) : null;
-      const badge = [kbps ? `${kbps} kbps` : null, stream.codec || null].filter(Boolean).join(' · ');
-      els.quality.textContent = badge;
-      setStatus(`Играю «${item.title}» (${badge || 'авто'})`);
+      els.audio.volume = state.volume / 100;
+      els.quality.textContent = '128 kbps · mp3 · HLS';
+      setStatus(`Играю «${item.title}» (128 kbps · mp3)`);
     } catch (e) {
       if (token !== state.currentReqToken) return;
       console.error(e);
       onStreamError('Не достал стрим');
     }
+  }
+
+  async function refetchTrack(id) {
+    const url = `${SC_API}/tracks/${encodeURIComponent(id)}?client_id=${encodeURIComponent(state.clientId)}`;
+    const res = await fetchWithTimeout(url, 10000);
+    if (!res.ok) throw new Error('track refetch HTTP ' + res.status);
+    return res.json();
   }
 
   function currentList() {
@@ -533,7 +554,7 @@
 
   function playPrev() {
     const list = currentList();
-    if (list.length && state.currentId) {
+    if (list.length && state.currentId != null) {
       const idx = list.findIndex((x) => x.id === state.currentId);
       let prev = idx - 1;
       if (prev < 0) {
@@ -546,7 +567,7 @@
   }
   function playNext() {
     const list = currentList();
-    if (list.length && state.currentId) {
+    if (list.length && state.currentId != null) {
       const idx = list.findIndex((x) => x.id === state.currentId);
       let next = idx + 1;
       if (next >= list.length) {
@@ -558,7 +579,7 @@
     }
   }
   function togglePlay() {
-    if (!state.currentId) {
+    if (state.currentId == null) {
       if (state.playlist.length) playItem(state.playlist[0], 'playlist');
       return;
     }
@@ -612,7 +633,6 @@
       els.audio.volume = state.volume / 100;
     });
 
-    // keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target && e.target.tagName) || '')) return;
       if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -622,7 +642,6 @@
   }
 
   // ---------- Boot ----------
-  initInstanceSelect();
   initAudio();
   wire();
   renderResults();
