@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0b0b10" />
   <title>БРАТАН-музончик 🎧</title>
-  <meta name="description" content="БРАТАН-музончик — бесплатный музыкальный плеер (SoundCloud + YouTube) с локальными плейлистами." />
+  <meta name="description" content="БРАТАН-музончик — музыкальный плеер (Tidal HiFi + SoundCloud + YouTube) с локальными плейлистами и скачиванием." />
   <link rel="preconnect" href="https://i1.sndcdn.com" />
   <link rel="preconnect" href="https://i.ytimg.com" />
   <link rel="preconnect" href="https://bratan-muzonchik.bratan-muzonchik.workers.dev" />
@@ -25,6 +25,7 @@
     <label class="source-picker" title="Источник аудио">
       <span>Источник:</span>
       <select id="sourceSel">
+        <option value="tidal">Tidal (lossless)</option>
         <option value="soundcloud">SoundCloud</option>
         <option value="youtube">YouTube</option>
       </select>
@@ -103,6 +104,7 @@
       <div class="row-actions">
         <button class="play" title="Играть сейчас">▶</button>
         <button class="add" title="В плейлист">＋</button>
+        <button class="dl" title="Скачать на устройство" hidden>⇩</button>
       </div>
     </li>
   </template>
@@ -117,12 +119,13 @@
       </div>
       <div class="row-actions">
         <button class="play" title="Играть">▶</button>
+        <button class="dl" title="Скачать на устройство" hidden>⇩</button>
         <button class="remove" title="Удалить">✕</button>
       </div>
     </li>
   </template>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
-  <script src="app.js?v=7" defer></script>
+  <script src="app.js?v=8" defer></script>
 </body>
 </html>

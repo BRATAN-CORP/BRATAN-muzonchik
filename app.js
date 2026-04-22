@@ -1,12 +1,12 @@
-// БРАТАН-музончик — бесплатный музыкальный плеер.
-// Два источника:
+// БРАТАН-музончик — музыкальный плеер.
+// Три источника:
+//   Tidal       — основной. Lossless FLAC 16/44.1 через OAuth-refresh в воркере.
+//                 Играем прямо в <audio>, тот же URL используем для скачивания.
 //   SoundCloud — стрим через Cloudflare-воркер (прокси SoundCloud v2 + CORS).
 //                 Plain HLS MP3 128 kbps без DRM, играется через hls.js.
 //   YouTube    — поиск через воркер /yt/search (проксированный Piped music_songs),
-//                 воспроизведение через официальный YouTube iframe-embed
-//                 (не упирается в Piped-ный bot-block; лейбл-embed-блоки ловим
-//                 через `onError` и автоматически скипаем на следующий).
-// Плейлист — localStorage, треки могут быть смешанные из обоих источников.
+//                 воспроизведение через официальный YouTube iframe-embed.
+// Плейлист — localStorage, треки могут быть смешанные из всех источников.
 
 (() => {
   'use strict';
@@ -18,7 +18,8 @@
   const LS_KEY_LOOP = 'bratan:loop:v1';
   const LS_KEY_SOURCE = 'bratan:source:v1';
 
-  const SOURCES = { SC: 'soundcloud', YT: 'youtube' };
+  const SOURCES = { SC: 'soundcloud', YT: 'youtube', TD: 'tidal' };
+  const VALID_SOURCES = new Set(Object.values(SOURCES));
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -94,12 +95,16 @@
       return arr
         .filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string'))
         // Старые версии не ставили `source` — там был только SoundCloud.
-        .map((x) => ({ source: x.source || SOURCES.SC, ...x, source: x.source || SOURCES.SC }));
+        .map((x) => {
+          const src = VALID_SOURCES.has(x.source) ? x.source : SOURCES.SC;
+          return { ...x, source: src };
+        });
     } catch { return []; }
   }
   function loadSource() {
     const s = localStorage.getItem(LS_KEY_SOURCE);
-    return s === SOURCES.YT ? SOURCES.YT : SOURCES.SC;
+    if (s && VALID_SOURCES.has(s)) return s;
+    return SOURCES.TD; // Tidal — основной движок
   }
   function saveSource(s) { localStorage.setItem(LS_KEY_SOURCE, s); }
 
@@ -222,13 +227,57 @@
     return Array.isArray(data.items) ? data.items : [];
   }
 
+  async function searchTidal(query) {
+    const url = `${API_BASE}/tidal/search?q=${encodeURIComponent(query)}&limit=30`;
+    const res = await fetchWithTimeout(url, 15000);
+    if (!res.ok) {
+      let body = {}; try { body = await res.json(); } catch {}
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    const data = await res.json();
+    return Array.isArray(data.items) ? data.items : [];
+  }
+
+  function normalizeTidalItem(it) {
+    return {
+      source: SOURCES.TD,
+      id: it.id,
+      title: (it.title || '').trim() || '(без названия)',
+      artist: it.artist || (it.artists && it.artists[0]) || 'Tidal',
+      thumb: it.cover || '',
+      duration: typeof it.duration === 'number' ? it.duration : null,
+      verified: true,
+      permalink: `https://tidal.com/browse/track/${it.id}`,
+      audioQuality: it.audioQuality || null,
+      explicit: !!it.explicit,
+    };
+  }
+
+  function isOfficialTidal(item) {
+    // Tidal catalog is label-sourced — all results are "официал".
+    // Но всё-равно дропаем инструменталки/ремиксы при строгом совпадении в title.
+    if (!item || !item.id) return false;
+    if (item.duration != null && item.duration < 30) return false;
+    return true;
+  }
+
   async function runSearch() {
     const q = els.search.value.trim();
     if (!q) return;
     els.results.innerHTML = '';
-    setStatus(state.source === SOURCES.YT ? 'Ищу на YouTube Music…' : 'Ищу официал на SoundCloud…');
+    const srcLabel = state.source === SOURCES.TD ? 'Tidal (lossless)'
+      : state.source === SOURCES.YT ? 'YouTube Music'
+      : 'SoundCloud';
+    setStatus(`Ищу на ${srcLabel}…`);
     try {
-      if (state.source === SOURCES.YT) {
+      if (state.source === SOURCES.TD) {
+        const raw = await searchTidal(q);
+        const items = raw.map(normalizeTidalItem).filter(isOfficialTidal);
+        state.results = items;
+        renderResults();
+        if (!items.length) setStatus('Ничего не нашёл, бро.');
+        else setStatus(`Найдено: ${items.length} треков (Tidal).`);
+      } else if (state.source === SOURCES.YT) {
         const raw = await searchYouTube(q);
         const items = raw.map(normalizeYtItem).filter(isOfficialYt);
         state.results = items;
@@ -254,6 +303,8 @@
       const msg = (e && e.message) || 'сеть';
       if (state.source === SOURCES.YT && /piped|unreachable|bot/i.test(msg)) {
         setStatus('YouTube временно недоступен (все прокси Piped блочат анонимные запросы). Переключись на SoundCloud.');
+      } else if (state.source === SOURCES.TD) {
+        setStatus('Tidal недоступен: ' + msg + '. Переключись на SoundCloud/YouTube.');
       } else {
         setStatus('Поиск не удался: ' + msg);
       }
@@ -318,8 +369,50 @@
     node.querySelector('.title').textContent = item.title;
     const durStr = item.duration ? ' · ' + fmtTime(item.duration) : '';
     const badge = item.verified ? ' ✓' : '';
-    const srcTag = item.source === SOURCES.YT ? '[YT] ' : '';
-    node.querySelector('.sub').textContent = srcTag + item.artist + badge + durStr;
+    const srcTag = item.source === SOURCES.YT ? '[YT] '
+      : item.source === SOURCES.TD ? '[Tidal] '
+      : '';
+    const qTag = (item.source === SOURCES.TD && item.audioQuality)
+      ? ' · ' + tidalQualityLabel(item.audioQuality)
+      : '';
+    node.querySelector('.sub').textContent = srcTag + item.artist + badge + durStr + qTag;
+
+    const dl = node.querySelector('.dl');
+    if (dl) {
+      if (item.source === SOURCES.TD) {
+        dl.hidden = false;
+        dl.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          downloadTidal(item);
+        });
+      } else {
+        dl.hidden = true;
+      }
+    }
+  }
+
+  function tidalQualityLabel(q) {
+    switch ((q || '').toUpperCase()) {
+      case 'HI_RES_LOSSLESS': return 'HiRes FLAC';
+      case 'HI_RES': return 'MQA';
+      case 'LOSSLESS': return 'FLAC 16/44';
+      case 'HIGH': return 'AAC 320';
+      case 'LOW': return 'AAC 96';
+      default: return q;
+    }
+  }
+
+  function downloadTidal(item) {
+    if (!item || item.source !== SOURCES.TD) return;
+    const url = `${API_BASE}/tidal/download?id=${encodeURIComponent(item.id)}&quality=LOSSLESS`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = ''; // use server-provided filename via Content-Disposition
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setStatus(`Качаю «${item.title}»…`);
   }
 
   // ---------- Playlist mgmt ----------
@@ -339,6 +432,7 @@
       verified: !!item.verified,
       permalink: item.permalink || '',
       transcoding: item.transcoding || null,
+      audioQuality: item.audioQuality || null,
     });
     savePlaylist();
     renderPlaylist();
@@ -447,7 +541,7 @@
       onTrackEnded();
     });
     els.audio.addEventListener('timeupdate', () => {
-      if (state.currentItem && state.currentItem.source !== SOURCES.SC) return;
+      if (state.currentItem && state.currentItem.source === SOURCES.YT) return;
       const cur = els.audio.currentTime || 0;
       const dur = els.audio.duration || 0;
       els.curTime.textContent = fmtTime(cur);
@@ -460,13 +554,13 @@
       }
     });
     els.audio.addEventListener('loadedmetadata', () => {
-      if (state.currentItem && state.currentItem.source !== SOURCES.SC) return;
+      if (state.currentItem && state.currentItem.source === SOURCES.YT) return;
       const dur = els.audio.duration || 0;
       if (dur > 0 && isFinite(dur)) els.durTime.textContent = fmtTime(dur);
     });
     els.audio.addEventListener('error', () => {
-      // YouTube ошибки идут через YT IFrame onError; здесь ловим только SC.
-      if (state.currentItem && state.currentItem.source !== SOURCES.SC) return;
+      // YouTube ошибки идут через YT IFrame onError; SC/Tidal — через <audio>.
+      if (state.currentItem && state.currentItem.source === SOURCES.YT) return;
       onStreamError('Стрим отвалился');
     });
   }
@@ -542,6 +636,30 @@
     const hit = arr.find((t) => t.id === id);
     if (!hit) throw new Error('track not found');
     return hit;
+  }
+
+  // ---------- Audio player (Tidal branch) ----------
+  async function playTidal(item, token) {
+    const url = `${API_BASE}/tidal/track?id=${encodeURIComponent(item.id)}&quality=LOSSLESS`;
+    const res = await fetchWithTimeout(url, 20000);
+    if (token !== state.currentReqToken) return;
+    if (!res.ok) {
+      let body = {}; try { body = await res.json(); } catch {}
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    const data = await res.json();
+    if (!data.stream) throw new Error('нет stream url');
+    teardownHls();
+    els.audio.src = data.stream;
+    els.audio.volume = state.volume / 100;
+    try { await els.audio.play(); } catch (e) { throw e; }
+    const codec = (data.codec || '').toLowerCase();
+    const qLabel = tidalQualityLabel(data.quality || data.audioQuality);
+    const bits = data.bitDepth && data.sampleRate
+      ? ` · ${data.bitDepth}bit/${Math.round(data.sampleRate/1000)}kHz`
+      : '';
+    els.quality.textContent = `Tidal · ${qLabel}${bits}`;
+    setStatus(`Играю «${item.title}» (${qLabel})`);
   }
 
   async function playSoundCloud(item, token) {
@@ -704,6 +822,8 @@
     try {
       if (item.source === SOURCES.YT) {
         await playYouTube(item, token);
+      } else if (item.source === SOURCES.TD) {
+        await playTidal(item, token);
       } else {
         await playSoundCloud(item, token);
       }
@@ -818,9 +938,12 @@
     // Clear results when switching source — they refer to the previous provider.
     state.results = [];
     renderResults();
-    els.search.placeholder = state.source === SOURCES.YT
-      ? 'Ищем на YouTube Music — трек, артист, альбом…'
-      : 'Чё слушаем, бро? Забей трек, артиста, альбом…';
+    const ph = state.source === SOURCES.TD
+      ? 'Ищем на Tidal — трек, артист, альбом…'
+      : state.source === SOURCES.YT
+        ? 'Ищем на YouTube Music — трек, артист, альбом…'
+        : 'Чё слушаем, бро? Забей трек, артиста, альбом…';
+    els.search.placeholder = ph;
     setStatus('');
   }
 
@@ -859,7 +982,8 @@
     });
 
     els.sourceSel.addEventListener('change', () => {
-      state.source = els.sourceSel.value === SOURCES.YT ? SOURCES.YT : SOURCES.SC;
+      const v = els.sourceSel.value;
+      state.source = VALID_SOURCES.has(v) ? v : SOURCES.TD;
       saveSource(state.source);
       applySourceToUi();
     });
