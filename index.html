@@ -38,6 +38,12 @@
       <span class="source-tag">только официал</span>
     </label>
     <div class="header-actions">
+      <div id="tgWidgetSlot" class="tg-slot" aria-label="Войти через Telegram"></div>
+      <span id="tgUserPill" class="tg-pill" hidden>
+        <img id="tgUserPhoto" alt="" />
+        <span id="tgUserName"></span>
+        <button id="tgLogoutBtn" type="button" title="Выйти" aria-label="Выйти">✕</button>
+      </span>
       <button id="installBtn" class="install-btn" type="button" hidden title="Установить как приложение">Установить</button>
       <a id="payBtn" class="pay-btn" href="#" target="_blank" rel="noopener" title="Оформить подписку">Оплатить 99 ₽/мес</a>
     </div>
@@ -103,6 +109,23 @@
   </footer>
 
   <audio id="audioEl" preload="none" crossorigin="anonymous"></audio>
+
+  <div id="paywallModal" class="modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="paywallTitle">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+      <div class="modal-emoji">🔒</div>
+      <h3 id="paywallTitle">Бесплатных треков на сегодня — всё</h3>
+      <p class="modal-sub">Бесплатно — <strong>3 трека в день</strong>. Оформи подписку и слушай без лимита — <strong>99 ₽/мес</strong>.</p>
+      <ul class="modal-bullets">
+        <li>Безлимит на все треки</li>
+        <li>Lossless FLAC 16/44.1 (Tidal)</li>
+        <li>Скачивание на устройство</li>
+      </ul>
+      <a id="paywallCta" class="pay-btn pay-btn--lg" href="#" target="_blank" rel="noopener">Оплатить 99 ₽/мес</a>
+      <p class="modal-hint">Оплата через Telegram-бота. Отменить можно в любой момент.</p>
+    </div>
+  </div>
 
   <template id="tpl-result">
     <li class="row">
