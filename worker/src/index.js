@@ -11,7 +11,7 @@
 // for the lifetime of the isolate (+ Cache API with 1h TTL to persist longer).
 
 const SC_ORIGIN = "https://api-v2.soundcloud.com";
-const SC_HLS_ALLOW = [/\.sndcdn\.com(\/|$)/i];
+const SC_HLS_ALLOWED_HOSTS = [/^(.+\.)?sndcdn\.com$/i];
 const CLIENT_ID_REGEX = /client_id[:=]"([A-Za-z0-9]{32})"/;
 const CLIENT_ID_CACHE_KEY = "https://bratan.internal/client-id";
 const CLIENT_ID_TTL_SECONDS = 3600;
@@ -89,17 +89,17 @@ async function getClientId(ctx) {
   return id;
 }
 
-function invalidateClientId(ctx) {
+async function invalidateClientId() {
   memoClientId = null;
   memoClientIdAt = 0;
-  ctx.waitUntil(caches.default.delete(CLIENT_ID_CACHE_KEY));
+  await caches.default.delete(CLIENT_ID_CACHE_KEY);
 }
 
 async function withClientId(ctx, fn) {
   let id = await getClientId(ctx);
   let resp = await fn(id);
   if (resp.status === 401 || resp.status === 403) {
-    invalidateClientId(ctx);
+    await invalidateClientId();
     id = await getClientId(ctx);
     resp = await fn(id);
   }
@@ -145,7 +145,15 @@ async function handleResolveTranscoding(url, ctx) {
 async function handleHls(url, req) {
   const target = url.searchParams.get("url");
   if (!target) return json({ error: "missing url" }, 400);
-  if (!SC_HLS_ALLOW.some((re) => re.test(target))) return json({ error: "host not allowed" }, 400);
+  let parsed;
+  try {
+    parsed = new URL(target);
+  } catch {
+    return json({ error: "invalid url" }, 400);
+  }
+  if (parsed.protocol !== "https:") return json({ error: "https only" }, 400);
+  const host = parsed.hostname.toLowerCase();
+  if (!SC_HLS_ALLOWED_HOSTS.some((re) => re.test(host))) return json({ error: "host not allowed" }, 400);
   const headers = new Headers();
   const range = req.headers.get("range");
   if (range) headers.set("range", range);

@@ -438,15 +438,25 @@
     if (Hls && Hls.isSupported()) {
       const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
       state.hls = hls;
-      hls.loadSource(m3u8Url);
-      hls.attachMedia(els.audio);
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data && data.fatal) onStreamError('HLS fatal: ' + (data.details || data.type || ''));
-      });
       return new Promise((resolve, reject) => {
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          els.audio.play().then(resolve).catch(reject);
+        let settled = false;
+        const done = (err) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err); else resolve();
+        };
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (data && data.fatal) {
+            const msg = 'HLS fatal: ' + (data.details || data.type || '');
+            done(new Error(msg));
+            onStreamError(msg);
+          }
         });
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          els.audio.play().then(() => done()).catch(done);
+        });
+        hls.loadSource(m3u8Url);
+        hls.attachMedia(els.audio);
       });
     }
     // Safari / iOS поддерживает HLS нативно
@@ -505,14 +515,14 @@
   }
 
   async function refetchTrack(id) {
-    // Worker currently exposes only /search + /resolve + /hls. For a legacy
-    // playlist item that was stored without a `transcoding` URL, fallback to
-    // searching by id via /search (SoundCloud returns track-id lookups there).
-    const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(String(id))}&limit=1`, 10000);
+    // Только если в сохранённом плейлисте нет `transcoding` — это может быть
+    // наследие старой версии. Ищем ровно этот track id; фоллбэк на `arr[0]`
+    // нельзя — поиск по числовому id у SoundCloud отдаёт левак.
+    const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(String(id))}&limit=10`, 10000);
     if (!res.ok) throw new Error('track refetch HTTP ' + res.status);
     const data = await res.json();
     const arr = Array.isArray(data.collection) ? data.collection : [];
-    const hit = arr.find((t) => t.id === id) || arr[0];
+    const hit = arr.find((t) => t.id === id);
     if (!hit) throw new Error('track not found');
     return hit;
   }
