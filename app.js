@@ -49,7 +49,14 @@
     importFile: $('#importFile'),
     sourceSel: $('#sourceSel'),
     ytWrap: $('#ytEmbedWrap'),
+    payBtn: $('#payBtn'),
+    installBtn: $('#installBtn'),
   };
+
+  // Paywall: ссылка на TG-бота для оплаты подписки 99 ₽/мес.
+  // Подставь реальный username/URL бота, когда он будет готов.
+  const PAYWALL_TG_URL = 'https://t.me/bratan_muzonchik_bot?start=pay';
+  const PAYWALL_PRICE_LABEL = 'Оплатить 99 ₽/мес';
 
   // ---------- State ----------
   const state = {
@@ -996,6 +1003,51 @@
     });
   }
 
+  // ---------- PWA ----------
+  function setupPwa() {
+    if (els.payBtn) {
+      els.payBtn.href = PAYWALL_TG_URL;
+      els.payBtn.textContent = PAYWALL_PRICE_LABEL;
+    }
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => { /* offline shell optional */ });
+      });
+    }
+
+    let deferredPrompt = null;
+    const installBtn = els.installBtn;
+    const isStandalone = () =>
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      if (installBtn && !isStandalone()) installBtn.hidden = false;
+    });
+
+    if (installBtn) {
+      installBtn.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        installBtn.disabled = true;
+        try {
+          deferredPrompt.prompt();
+          await deferredPrompt.userChoice;
+        } catch { /* no-op */ }
+        deferredPrompt = null;
+        installBtn.hidden = true;
+        installBtn.disabled = false;
+      });
+    }
+
+    window.addEventListener('appinstalled', () => {
+      if (installBtn) installBtn.hidden = true;
+      deferredPrompt = null;
+    });
+  }
+
   // ---------- Boot ----------
   initAudio();
   applySourceToUi();
@@ -1003,4 +1055,5 @@
   renderPlaylist();
   setStatus('');
   updateLoopBtn();
+  setupPwa();
 })();
