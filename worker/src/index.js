@@ -1,20 +1,38 @@
 // bratan-muzonchik Cloudflare Worker
-// Proxies SoundCloud API v2 + HLS streams and adds CORS headers so the
+// Proxies SoundCloud + Piped (YouTube) APIs and adds CORS headers so the
 // static GitHub Pages frontend can call it directly from the browser.
 //
 // Endpoints:
 //   GET  /search?q=<query>&limit=<n>       -> SoundCloud /search/tracks JSON
 //   GET  /resolve?url=<transcoding_url>    -> { url: "<m3u8 url>" }
 //   GET  /hls?url=<encoded m3u8 or mp3>    -> raw playlist/segment bytes
+//   GET  /yt/search?q=<query>              -> { items: [...] }  Piped music_songs
+//   GET  /yt/streams?id=<videoId>          -> { title, duration, audio: [{url,bitrate,codec,mime}] }
+//   GET  /ytaudio?url=<encoded>            -> raw audio bytes (googlevideo / piped proxy)
+//   GET  /health                           -> { ok: true }
 //
 // client_id is scraped from soundcloud.com JS bundles and cached in-memory
 // for the lifetime of the isolate (+ Cache API with 1h TTL to persist longer).
 
 const SC_ORIGIN = "https://api-v2.soundcloud.com";
 const SC_HLS_ALLOWED_HOSTS = [/^(.+\.)?sndcdn\.com$/i];
+const YT_AUDIO_ALLOWED_HOSTS = [
+  /^(.+\.)?googlevideo\.com$/i,
+  /^pipedproxy\..+$/i,          // e.g. pipedproxy.kavin.rocks, pipedproxy.adminforge.de
+  /^proxy\.piped\..+$/i,         // e.g. proxy.piped.private.coffee, proxy.piped.projectsegfau.lt
+];
 const CLIENT_ID_REGEX = /client_id[:=]"([A-Za-z0-9]{32})"/;
 const CLIENT_ID_CACHE_KEY = "https://bratan.internal/client-id";
 const CLIENT_ID_TTL_SECONDS = 3600;
+
+// Piped instances. Tried in order; first that returns valid JSON wins.
+// Keep short — only include instances observed to respond on mainstream queries.
+const PIPED_INSTANCES = [
+  "https://api.piped.private.coffee",
+  "https://api.piped.projectsegfau.lt",
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.adminforge.de",
+];
 
 let memoClientId = null;
 let memoClientIdAt = 0;
@@ -27,18 +45,14 @@ const CORS_HEADERS = {
   "access-control-max-age": "86400",
 };
 
-function corsify(resp) {
-  const headers = new Headers(resp.headers);
-  for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
-  return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers });
-}
-
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", ...CORS_HEADERS },
   });
 }
+
+// ---------- SoundCloud ----------
 
 async function fetchClientIdFresh() {
   const html = await fetch("https://soundcloud.com/", {
@@ -199,6 +213,139 @@ function rewriteM3u8(text, baseUrl) {
   return lines.join("\n");
 }
 
+// ---------- YouTube (via Piped) ----------
+
+async function pipedFetchJson(path) {
+  // try instances in order; return first response that parses as JSON and looks valid
+  let lastErr = null;
+  for (const origin of PIPED_INSTANCES) {
+    try {
+      const res = await fetch(origin + path, {
+        headers: { accept: "application/json", "user-agent": "Mozilla/5.0 bratan-muzonchik" },
+        cf: { cacheTtl: 0 },
+      });
+      if (!res.ok) { lastErr = new Error("piped " + origin + " HTTP " + res.status); continue; }
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { lastErr = new Error("piped " + origin + " non-json"); continue; }
+      if (data && data.error) { lastErr = new Error("piped " + origin + " err: " + data.error); continue; }
+      return { origin, data };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("no piped instance responded");
+}
+
+// YouTube-ID regex: exactly 11 chars A-Za-z0-9_-
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+function isYoutubeId(s) { return typeof s === "string" && YT_ID_RE.test(s); }
+
+function normalizeYtSearchItem(it) {
+  // Piped search item: { type: "stream", url: "/watch?v=xxx", title, uploaderName, uploaderUrl, uploaderVerified, duration, thumbnail }
+  if (!it || it.type !== "stream" || !it.url) return null;
+  const m = /[?&]v=([A-Za-z0-9_-]{11})/.exec(it.url);
+  if (!m) return null;
+  return {
+    id: m[1],
+    title: (it.title || "").trim(),
+    uploader: (it.uploaderName || "").trim(),
+    uploaderUrl: it.uploaderUrl || "",
+    verified: !!it.uploaderVerified,
+    duration: typeof it.duration === "number" ? it.duration : null,  // seconds
+    thumbnail: it.thumbnail || "",
+  };
+}
+
+async function handleYtSearch(url) {
+  const q = (url.searchParams.get("q") || "").trim();
+  if (!q) return json({ error: "missing q" }, 400);
+  try {
+    const { data } = await pipedFetchJson("/search?q=" + encodeURIComponent(q) + "&filter=music_songs");
+    const items = Array.isArray(data.items) ? data.items.map(normalizeYtSearchItem).filter(Boolean) : [];
+    return json({ items });
+  } catch (e) {
+    return json({ error: "piped_unreachable", detail: String(e && e.message || e) }, 502);
+  }
+}
+
+async function handleYtStreams(url, reqUrl) {
+  const id = (url.searchParams.get("id") || "").trim();
+  if (!isYoutubeId(id)) return json({ error: "bad id" }, 400);
+  let pickedOrigin = null;
+  let data = null;
+  try {
+    const res = await pipedFetchJson("/streams/" + id);
+    pickedOrigin = res.origin;
+    data = res.data;
+  } catch (e) {
+    return json({ error: "piped_unreachable", detail: String(e && e.message || e) }, 502);
+  }
+  if (!data || data.error || !Array.isArray(data.audioStreams) || data.audioStreams.length === 0) {
+    // YouTube often returns "sign-in to confirm you're not a bot" for all Piped instances.
+    return json({
+      error: "no_audio",
+      detail: String((data && data.error) || "youtube bot-blocked"),
+    }, 502);
+  }
+  // Pick highest bitrate; prefer opus/m4a
+  const ranked = data.audioStreams.slice().sort((a, b) => {
+    const br = (b.bitrate || 0) - (a.bitrate || 0);
+    if (br !== 0) return br;
+    const codecRank = (x) => (x.codec || x.mimeType || "").includes("opus") ? 2 : 1;
+    return codecRank(b) - codecRank(a);
+  });
+  const best = ranked[0];
+  if (!best || !best.url) return json({ error: "no audio url" }, 502);
+  const proxied = `${reqUrl.origin}/ytaudio?url=${encodeURIComponent(best.url)}`;
+  return json({
+    id,
+    title: data.title || "",
+    uploader: data.uploader || "",
+    duration: data.duration || null,
+    thumbnail: data.thumbnailUrl || "",
+    audio: {
+      url: proxied,
+      bitrate: best.bitrate || null,
+      codec: best.codec || "",
+      mime: best.mimeType || "",
+      format: best.format || "",
+    },
+    source_instance: pickedOrigin,
+  });
+}
+
+async function handleYtAudio(url, req) {
+  const target = url.searchParams.get("url");
+  if (!target) return json({ error: "missing url" }, 400);
+  let parsed;
+  try { parsed = new URL(target); } catch { return json({ error: "invalid url" }, 400); }
+  if (parsed.protocol !== "https:") return json({ error: "https only" }, 400);
+  const host = parsed.hostname.toLowerCase();
+  if (!YT_AUDIO_ALLOWED_HOSTS.some((re) => re.test(host))) return json({ error: "host not allowed" }, 400);
+  const headers = new Headers();
+  const range = req.headers.get("range");
+  if (range) headers.set("range", range);
+  const upstream = await fetch(target, { headers });
+  const outHeaders = new Headers();
+  for (const k of [
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+    "cache-control",
+    "etag",
+    "last-modified",
+  ]) {
+    const v = upstream.headers.get(k);
+    if (v) outHeaders.set(k, v);
+  }
+  for (const [k, v] of Object.entries(CORS_HEADERS)) outHeaders.set(k, v);
+  return new Response(upstream.body, { status: upstream.status, headers: outHeaders });
+}
+
+// ---------- Router ----------
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -214,6 +361,12 @@ export default {
         resp = await handleResolveTranscoding(url, ctx);
       } else if (url.pathname === "/hls") {
         resp = await handleHls(url, request);
+      } else if (url.pathname === "/yt/search") {
+        resp = await handleYtSearch(url);
+      } else if (url.pathname === "/yt/streams") {
+        resp = await handleYtStreams(url, url);
+      } else if (url.pathname === "/ytaudio") {
+        resp = await handleYtAudio(url, request);
       } else {
         resp = json({ error: "not found" }, 404);
       }
