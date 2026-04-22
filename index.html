@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0b0b10" />
   <title>БРАТАН-музончик 🎧</title>
-  <meta name="description" content="БРАТАН-музончик — бесплатный музыкальный плеер на базе YouTube/Piped с локальными плейлистами." />
-  <link rel="preconnect" href="https://i.ytimg.com" />
+  <meta name="description" content="БРАТАН-музончик — бесплатный музыкальный плеер на базе SoundCloud с локальными плейлистами." />
+  <link rel="preconnect" href="https://i1.sndcdn.com" />
+  <link rel="preconnect" href="https://bratan-muzonchik.bratan-muzonchik.workers.dev" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎧%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -20,9 +21,8 @@
       <input id="search" type="search" placeholder="Чё слушаем, бро? Забей трек, артиста, альбом..." autocomplete="off" />
       <button id="searchBtn" type="button" aria-label="Искать">Искать</button>
     </div>
-    <div class="instance-wrap" title="Бэкенд поиска (Piped). Переключись если не грузит.">
-      <label for="instance">API:</label>
-      <select id="instance"></select>
+    <div class="source-badge" title="Источник аудио">
+      <span>Источник:</span> <strong>SoundCloud</strong> · только официал
     </div>
   </header>
 
@@ -112,6 +112,7 @@
     </li>
   </template>
 
-  <script src="app.js?v=4" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
+  <script src="app.js?v=6" defer></script>
 </body>
 </html>
