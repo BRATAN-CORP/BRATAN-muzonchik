@@ -1,25 +1,24 @@
-// БРАТАН-музончик — бесплатный музыкальный плеер на базе SoundCloud.
-// Фронтенд статический (GitHub Pages), бэкенд — Cloudflare Worker-прокси
-// (https://github.com/blessblissmari/bratan-muzonchik/tree/main/worker),
-// нужен потому что api-v2.soundcloud.com не отдаёт CORS. Воркер также
-// автоматически подтягивает свежий client_id из soundcloud.com JS и кеширует
-// его на час, так что фронту о нём знать не надо.
-//
-// Официал-фильтр: берём только tracks с verified-артиста ИЛИ с заполненным
-// `publisher_metadata.artist` (т.е. это релиз через лейбл), плюс режем по словарю
-// cover/karaoke/sped up/slowed/nightcore/mashup/fan edit/lyric video/etc.
-// Стрим — plain HLS MP3 128 kbps (без DRM), играется через hls.js в любом браузере.
+// БРАТАН-музончик — бесплатный музыкальный плеер.
+// Два источника:
+//   SoundCloud — стрим через Cloudflare-воркер (прокси SoundCloud v2 + CORS).
+//                 Plain HLS MP3 128 kbps без DRM, играется через hls.js.
+//   YouTube    — поиск через воркер /yt/search (проксированный Piped music_songs),
+//                 воспроизведение через официальный YouTube iframe-embed
+//                 (не упирается в Piped-ный bot-block; лейбл-embed-блоки ловим
+//                 через `onError` и автоматически скипаем на следующий).
+// Плейлист — localStorage, треки могут быть смешанные из обоих источников.
 
 (() => {
   'use strict';
 
-  // Cloudflare Worker (прокси SoundCloud + CORS). Если фронт раскатан на другом
-  // инстансе, подмени этот URL на свой.
   const API_BASE = 'https://bratan-muzonchik.bratan-muzonchik.workers.dev';
 
   const LS_KEY_PLAYLIST = 'bratan:playlist:v2';
   const LS_KEY_VOLUME = 'bratan:volume:v1';
   const LS_KEY_LOOP = 'bratan:loop:v1';
+  const LS_KEY_SOURCE = 'bratan:source:v1';
+
+  const SOURCES = { SC: 'soundcloud', YT: 'youtube' };
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -47,20 +46,27 @@
     importBtn: $('#importBtn'),
     clearBtn: $('#clearBtn'),
     importFile: $('#importFile'),
+    sourceSel: $('#sourceSel'),
+    ytWrap: $('#ytEmbedWrap'),
   };
 
   // ---------- State ----------
   const state = {
+    source: loadSource(),       // 'soundcloud' | 'youtube' — влияет на поиск
     results: [],
     playlist: loadPlaylist(),
-    currentId: null,         // SoundCloud track id (number) of currently-loaded track
-    currentSource: null,     // 'playlist' | 'results'
+    currentId: null,            // id of currently-loaded track (SC numeric / YT 11-char)
+    currentItem: null,          // full item (we need item.source to route play)
+    currentList: null,          // 'playlist' | 'results'
     isPlaying: false,
     loop: localStorage.getItem(LS_KEY_LOOP) === '1',
     volume: clampInt(parseInt(localStorage.getItem(LS_KEY_VOLUME) || '80', 10), 0, 100),
     consecutiveErrors: 0,
-    currentReqToken: 0,      // cancels stale stream-resolve fetches when the user jumps tracks
-    hls: null,               // active Hls.js instance (if any)
+    currentReqToken: 0,         // cancels stale stream-resolve fetches on track change
+    hls: null,                  // active Hls.js instance (SC)
+    ytPlayer: null,             // active YT.Player instance (YT)
+    ytReadyP: null,             // promise that resolves when YT IFrame API loaded
+    ytTimer: null,              // interval to poll currentTime (YT has no timeupdate)
   };
 
   // ---------- Helpers ----------
@@ -85,18 +91,25 @@
       if (!raw) return [];
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr)) return [];
-      return arr.filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string'));
+      return arr
+        .filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string'))
+        // Старые версии не ставили `source` — там был только SoundCloud.
+        .map((x) => ({ source: x.source || SOURCES.SC, ...x, source: x.source || SOURCES.SC }));
     } catch { return []; }
   }
+  function loadSource() {
+    const s = localStorage.getItem(LS_KEY_SOURCE);
+    return s === SOURCES.YT ? SOURCES.YT : SOURCES.SC;
+  }
+  function saveSource(s) { localStorage.setItem(LS_KEY_SOURCE, s); }
+
   function fetchWithTimeout(url, ms) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     return fetch(url, { signal: ctrl.signal, mode: 'cors' }).finally(() => clearTimeout(t));
   }
 
-  // ---------- Official-only filter ----------
-  // SoundCloud позволяет кому угодно залить перезалив/ускоренку/ремикс — фильтруем
-  // жёстче чем Piped. На вход попадает уже нормализованный item.
+  // ---------- Official-only filter (SoundCloud) ----------
   const REUPLOAD_PATTERNS = [
     /\breupload(ed)?\b/i,
     /\bkaraoke\b/i,
@@ -109,7 +122,7 @@
     /\bfan\s*(made|edit|remix|version)\b/i,
     /\bmashup\b/i,
     /\blyric(s)?\s*video\b/i,
-    /\bremix\b/i,              // все ремиксы — мимо официала
+    /\bremix\b/i,
     /\binstrumental\b/i,
     /\bacapella\b/i, /\ba\s*capella\b/i,
     /\btype\s*beat\b/i,
@@ -128,19 +141,15 @@
     const user = tr.user || {};
     const pm = tr.publisher_metadata || null;
     const verified = user.verified === true;
-    // publisher_metadata с artist/label означает релиз через лейбл (даже если аккаунт
-    // сам не верифицирован — типа Rick Astley's own "Remastered 2022" uploads).
     const hasPublisherReleaseInfo = !!(pm && (pm.artist || pm.album_title || pm.isrc));
     if (!verified && !hasPublisherReleaseInfo) return false;
     if (looksLikeReupload(tr.title, user.username)) return false;
-    // Нужен HLS MP3 транскодинг (не DRM-зашифрованный AAC)
     if (!pickHlsMp3Transcoding(tr)) return false;
     return true;
   }
 
   function pickHlsMp3Transcoding(tr) {
     const list = (tr && tr.media && Array.isArray(tr.media.transcodings)) ? tr.media.transcodings : [];
-    // Plain HLS MP3 — без DRM, играется через hls.js
     return list.find((t) => {
       const fmt = t.format || {};
       return fmt.protocol === 'hls' && fmt.mime_type === 'audio/mpeg';
@@ -152,19 +161,45 @@
     const pm = tr.publisher_metadata || {};
     const artist = (pm.artist || user.username || 'Неизвестный исполнитель').trim();
     let thumb = tr.artwork_url || user.avatar_url || '';
-    // в SC часто отдают "-large" (100x100) — заменим на "-t300x300" если шаблон совпал
     if (thumb) thumb = thumb.replace(/-large(\.[a-z]+)$/i, '-t300x300$1');
     return {
-      id: tr.id,                                    // numeric SoundCloud track id
+      source: SOURCES.SC,
+      id: tr.id,
       urn: tr.urn || `soundcloud:tracks:${tr.id}`,
       title: (tr.title || '').trim() || '(без названия)',
       artist,
       thumb,
-      duration: tr.duration ? Math.round(tr.duration / 1000) : null,  // SC duration is ms
+      duration: tr.duration ? Math.round(tr.duration / 1000) : null,
       verified: (user.verified === true),
       permalink: tr.permalink_url || '',
       transcoding: pickHlsMp3Transcoding(tr)?.url || null,
     };
+  }
+
+  // ---------- YouTube official-only filter ----------
+  // Piped `filter=music_songs` уже возвращает только тред YouTube Music Songs
+  // (т.е. курируемый официал). Всё равно режем по тому же словарю на всякий случай.
+  function normalizeYtItem(it) {
+    return {
+      source: SOURCES.YT,
+      id: it.id,
+      title: (it.title || '').trim() || '(без названия)',
+      artist: (it.uploader || 'YouTube').replace(/\s*-\s*Topic$/i, ''),
+      thumb: it.thumbnail || `https://i.ytimg.com/vi/${it.id}/mqdefault.jpg`,
+      duration: typeof it.duration === 'number' ? it.duration : null,
+      verified: !!it.verified || /-?\s*Topic$/i.test(it.uploader || ''),
+      permalink: `https://music.youtube.com/watch?v=${it.id}`,
+    };
+  }
+
+  function isOfficialYt(item) {
+    // Piped music_songs уже отдаёт только раздел YouTube Music "Songs"
+    // (т.е. релизы лейблов и верифицированных артистов). `uploaderVerified`
+    // в Piped-ответе приходит false даже для VEVO/Official — не используем его.
+    if (!item || !item.id) return false;
+    if (item.duration != null && item.duration < 30) return false;
+    if (looksLikeReupload(item.title, item.artist)) return false;
+    return true;
   }
 
   // ---------- Search ----------
@@ -176,33 +211,58 @@
     return Array.isArray(data.collection) ? data.collection : [];
   }
 
+  async function searchYouTube(query) {
+    const url = `${API_BASE}/yt/search?q=${encodeURIComponent(query)}`;
+    const res = await fetchWithTimeout(url, 15000);
+    if (!res.ok) {
+      let body = {}; try { body = await res.json(); } catch {}
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    const data = await res.json();
+    return Array.isArray(data.items) ? data.items : [];
+  }
+
   async function runSearch() {
     const q = els.search.value.trim();
     if (!q) return;
     els.results.innerHTML = '';
-    setStatus('Ищу официал на SoundCloud…');
+    setStatus(state.source === SOURCES.YT ? 'Ищу на YouTube Music…' : 'Ищу официал на SoundCloud…');
     try {
-      const raw = await searchSoundCloud(q);
-      const official = raw.filter(isOfficialSCTrack).map(normalizeSCTrack);
-      state.results = official;
-      renderResults();
-      const dropped = raw.length - official.length;
-      if (official.length === 0 && raw.length > 0) {
-        setStatus('Нашёл только перезаливы/каверы — уточни запрос (артист + трек).');
-      } else if (official.length === 0) {
-        setStatus('Ничего не нашёл, бро.');
-      } else if (dropped > 0) {
-        setStatus(`Найдено: ${official.length} официальных · отсеял ${dropped} не-официальных.`);
+      if (state.source === SOURCES.YT) {
+        const raw = await searchYouTube(q);
+        const items = raw.map(normalizeYtItem).filter(isOfficialYt);
+        state.results = items;
+        renderResults();
+        const dropped = raw.length - items.length;
+        if (!items.length && raw.length) setStatus('Нашёл только перезаливы/каверы — уточни запрос.');
+        else if (!items.length) setStatus('Ничего не нашёл, бро.');
+        else if (dropped > 0) setStatus(`Найдено: ${items.length} официальных · отсеял ${dropped} не-официальных.`);
+        else setStatus(`Найдено: ${items.length} официальных треков.`);
       } else {
-        setStatus(`Найдено: ${official.length} официальных треков.`);
+        const raw = await searchSoundCloud(q);
+        const items = raw.filter(isOfficialSCTrack).map(normalizeSCTrack);
+        state.results = items;
+        renderResults();
+        const dropped = raw.length - items.length;
+        if (!items.length && raw.length) setStatus('Нашёл только перезаливы/каверы — уточни запрос (артист + трек).');
+        else if (!items.length) setStatus('Ничего не нашёл, бро.');
+        else if (dropped > 0) setStatus(`Найдено: ${items.length} официальных · отсеял ${dropped} не-официальных.`);
+        else setStatus(`Найдено: ${items.length} официальных треков.`);
       }
     } catch (e) {
       console.error(e);
-      setStatus('Поиск не удался: ' + (e && e.message ? e.message : 'сеть'));
+      const msg = (e && e.message) || 'сеть';
+      if (state.source === SOURCES.YT && /piped|unreachable|bot/i.test(msg)) {
+        setStatus('YouTube временно недоступен (все прокси Piped блочат анонимные запросы). Переключись на SoundCloud.');
+      } else {
+        setStatus('Поиск не удался: ' + msg);
+      }
     }
   }
 
   // ---------- Rendering ----------
+  function itemKey(item) { return `${item.source}:${item.id}`; }
+
   function renderResults() {
     els.results.innerHTML = '';
     if (!state.results.length) {
@@ -210,6 +270,7 @@
       return;
     }
     const tpl = document.getElementById('tpl-result');
+    const curKey = state.currentItem ? itemKey(state.currentItem) : null;
     for (const item of state.results) {
       const node = tpl.content.firstElementChild.cloneNode(true);
       fillRow(node, item);
@@ -219,7 +280,7 @@
         addToPlaylist(item);
       });
       node.addEventListener('dblclick', () => playItem(item, 'results'));
-      if (state.currentId === item.id) node.classList.add('playing');
+      if (curKey && itemKey(item) === curKey) node.classList.add('playing');
       els.results.appendChild(node);
     }
   }
@@ -231,6 +292,7 @@
       return;
     }
     const tpl = document.getElementById('tpl-plitem');
+    const curKey = state.currentItem ? itemKey(state.currentItem) : null;
     state.playlist.forEach((item, idx) => {
       const node = tpl.content.firstElementChild.cloneNode(true);
       fillRow(node, item);
@@ -239,11 +301,11 @@
       node.querySelector('.play').addEventListener('click', () => playItem(item, 'playlist'));
       node.querySelector('.remove').addEventListener('click', (ev) => {
         ev.stopPropagation();
-        removeFromPlaylist(item.id);
+        removeFromPlaylist(item);
       });
       node.addEventListener('dblclick', () => playItem(item, 'playlist'));
       attachDragHandlers(node);
-      if (state.currentId === item.id && state.currentSource === 'playlist') node.classList.add('playing');
+      if (curKey && itemKey(item) === curKey && state.currentList === 'playlist') node.classList.add('playing');
       els.playlist.appendChild(node);
     });
   }
@@ -256,18 +318,20 @@
     node.querySelector('.title').textContent = item.title;
     const durStr = item.duration ? ' · ' + fmtTime(item.duration) : '';
     const badge = item.verified ? ' ✓' : '';
-    node.querySelector('.sub').textContent = item.artist + badge + durStr;
+    const srcTag = item.source === SOURCES.YT ? '[YT] ' : '';
+    node.querySelector('.sub').textContent = srcTag + item.artist + badge + durStr;
   }
 
   // ---------- Playlist mgmt ----------
   function addToPlaylist(item) {
-    if (state.playlist.some((x) => x.id === item.id)) {
+    if (state.playlist.some((x) => itemKey(x) === itemKey(item))) {
       setStatus(`«${item.title}» уже в плейлисте.`);
       return;
     }
     state.playlist.push({
+      source: item.source,
       id: item.id,
-      urn: item.urn,
+      urn: item.urn || null,
       title: item.title,
       artist: item.artist,
       thumb: item.thumb,
@@ -281,8 +345,9 @@
     setStatus(`Добавил в плейлист: ${item.title}`);
   }
 
-  function removeFromPlaylist(id) {
-    state.playlist = state.playlist.filter((x) => x.id !== id);
+  function removeFromPlaylist(item) {
+    const key = itemKey(item);
+    state.playlist = state.playlist.filter((x) => itemKey(x) !== key);
     savePlaylist();
     renderPlaylist();
   }
@@ -322,9 +387,11 @@
       try {
         const arr = JSON.parse(reader.result);
         if (!Array.isArray(arr)) throw new Error('not array');
-        const clean = arr.filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string') && typeof x.title === 'string');
-        const seen = new Set(state.playlist.map((x) => x.id));
-        for (const it of clean) if (!seen.has(it.id)) { state.playlist.push(it); seen.add(it.id); }
+        const clean = arr
+          .filter((x) => x && (typeof x.id === 'number' || typeof x.id === 'string') && typeof x.title === 'string')
+          .map((x) => ({ source: x.source || SOURCES.SC, ...x, source: x.source || SOURCES.SC }));
+        const seen = new Set(state.playlist.map(itemKey));
+        for (const it of clean) if (!seen.has(itemKey(it))) { state.playlist.push(it); seen.add(itemKey(it)); }
         savePlaylist();
         renderPlaylist();
         setStatus(`Импортировал ${clean.length} треков.`);
@@ -358,7 +425,7 @@
     });
   }
 
-  // ---------- Audio player ----------
+  // ---------- Audio player (SoundCloud branch) ----------
   function initAudio() {
     els.audio.volume = state.volume / 100;
     els.audio.addEventListener('play', () => {
@@ -380,6 +447,7 @@
       onTrackEnded();
     });
     els.audio.addEventListener('timeupdate', () => {
+      if (state.currentItem && state.currentItem.source !== SOURCES.SC) return;
       const cur = els.audio.currentTime || 0;
       const dur = els.audio.duration || 0;
       els.curTime.textContent = fmtTime(cur);
@@ -391,38 +459,30 @@
         }
       }
     });
-    els.audio.addEventListener('loadedmetadata', () => {
-      const dur = els.audio.duration || 0;
-      if (dur > 0 && isFinite(dur)) els.durTime.textContent = fmtTime(dur);
-    });
-    els.audio.addEventListener('error', () => {
-      onStreamError('Стрим отвалился');
-    });
-    updateLoopBtn();
-  }
-
-  function onStreamError(reason) {
-    const title = els.nowTitle.textContent || 'трек';
-    setStatus(`${reason} на «${title}». Переключаюсь дальше…`);
-    state.consecutiveErrors++;
-    if (state.consecutiveErrors > 6) {
-      setStatus('Много подряд проблемных треков — притормозил. Попробуй другой запрос.');
-      state.consecutiveErrors = 0;
-      return;
-    }
-    onTrackEnded();
   }
 
   function teardownHls() {
-    if (state.hls) {
-      try { state.hls.destroy(); } catch {}
-      state.hls = null;
-    }
+    if (state.hls) { try { state.hls.destroy(); } catch {} state.hls = null; }
   }
 
-  // Resolve SoundCloud HLS playlist URL through the Worker (the Worker re-signs
-  // it with a fresh client_id and returns a wrapped /hls?url=... link so the
-  // m3u8 segments also go through the CORS-enabled proxy).
+  function stopCurrent() {
+    teardownHls();
+    try { els.audio.pause(); } catch {}
+    els.audio.removeAttribute('src');
+    els.audio.load();
+    stopYt();
+  }
+
+  function onStreamError(message) {
+    state.consecutiveErrors++;
+    setStatus(`${message}. Переключаюсь дальше…`);
+    if (state.consecutiveErrors > 6) {
+      setStatus('Слишком много подряд недоступных треков — стоп. Выбери другой.');
+      return;
+    }
+    setTimeout(() => autoAdvance(), 300);
+  }
+
   async function resolveSCStream(transcodingUrl) {
     const url = `${API_BASE}/resolve?url=${encodeURIComponent(transcodingUrl)}`;
     const res = await fetchWithTimeout(url, 15000);
@@ -457,7 +517,6 @@
         hls.attachMedia(els.audio);
       });
     }
-    // Safari / iOS поддерживает HLS нативно
     if (els.audio.canPlayType('application/vnd.apple.mpegurl')) {
       els.audio.src = m3u8Url;
       return els.audio.play();
@@ -465,9 +524,150 @@
     throw new Error('браузер не умеет HLS');
   }
 
-  async function playItem(item, source) {
+  async function refetchSCTrack(id) {
+    const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(String(id))}&limit=10`, 10000);
+    if (!res.ok) throw new Error('track refetch HTTP ' + res.status);
+    const data = await res.json();
+    const arr = Array.isArray(data.collection) ? data.collection : [];
+    const hit = arr.find((t) => t.id === id);
+    if (!hit) throw new Error('track not found');
+    return hit;
+  }
+
+  async function playSoundCloud(item, token) {
+    let transcoding = item.transcoding;
+    if (!transcoding) {
+      const tr = await refetchSCTrack(item.id);
+      if (token !== state.currentReqToken) return;
+      const pick = pickHlsMp3Transcoding(tr);
+      if (!pick) throw new Error('у трека нет plain-HLS (DRM)');
+      transcoding = pick.url;
+      const pi = state.playlist.find((x) => itemKey(x) === itemKey(item));
+      if (pi) { pi.transcoding = transcoding; savePlaylist(); }
+    }
+    const m3u8 = await resolveSCStream(transcoding);
+    if (token !== state.currentReqToken) return;
+    await attachPlaylistUrl(m3u8);
+    els.audio.volume = state.volume / 100;
+    els.quality.textContent = '128 kbps · mp3 · HLS';
+    setStatus(`Играю «${item.title}» (128 kbps · mp3)`);
+  }
+
+  // ---------- Audio player (YouTube branch, iframe API) ----------
+  function ensureYtApi() {
+    if (state.ytReadyP) return state.ytReadyP;
+    state.ytReadyP = new Promise((resolve) => {
+      if (window.YT && window.YT.Player) return resolve();
+      const prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = function () {
+        if (typeof prev === 'function') { try { prev(); } catch {} }
+        resolve();
+      };
+      const s = document.createElement('script');
+      s.src = 'https://www.youtube.com/iframe_api';
+      s.async = true;
+      document.head.appendChild(s);
+    });
+    return state.ytReadyP;
+  }
+
+  function stopYtTimer() { if (state.ytTimer) { clearInterval(state.ytTimer); state.ytTimer = null; } }
+
+  function stopYt() {
+    stopYtTimer();
+    if (state.ytPlayer) {
+      try { state.ytPlayer.stopVideo(); } catch {}
+    }
+    els.ytWrap.hidden = true;
+  }
+
+  function startYtTimer() {
+    stopYtTimer();
+    state.ytTimer = setInterval(() => {
+      const p = state.ytPlayer;
+      if (!p || !p.getCurrentTime) return;
+      let cur = 0, dur = 0;
+      try { cur = p.getCurrentTime() || 0; dur = p.getDuration() || 0; } catch {}
+      els.curTime.textContent = fmtTime(cur);
+      if (dur > 0) {
+        els.durTime.textContent = fmtTime(dur);
+        if (!els.seek._dragging) {
+          els.seek.value = Math.floor((cur / dur) * 1000);
+          setRangeFill(els.seek);
+        }
+      }
+    }, 500);
+  }
+
+  function playYouTube(item, token) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        await ensureYtApi();
+        if (token !== state.currentReqToken) return resolve();
+        els.ytWrap.hidden = false;
+        // YouTube IFrame API полностью пересоздаёт iframe при каждом new Player
+        // — чтобы не копить DOM, убиваем старый и ставим свежий.
+        if (state.ytPlayer) { try { state.ytPlayer.destroy(); } catch {} state.ytPlayer = null; }
+        const frame = document.createElement('div');
+        frame.id = 'ytFrame';
+        els.ytWrap.innerHTML = '';
+        els.ytWrap.appendChild(frame);
+
+        let settled = false;
+        const done = (err) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err); else resolve();
+        };
+
+        state.ytPlayer = new window.YT.Player('ytFrame', {
+          width: '100%',
+          height: '100%',
+          videoId: item.id,
+          playerVars: {
+            autoplay: 1,
+            playsinline: 1,
+            controls: 0,
+            disablekb: 1,
+            modestbranding: 1,
+            rel: 0,
+            fs: 0,
+          },
+          events: {
+            onReady: (ev) => {
+              try {
+                ev.target.setVolume(state.volume);
+                ev.target.playVideo();
+              } catch {}
+              startYtTimer();
+              els.quality.textContent = 'YouTube';
+              setStatus(`Играю «${item.title}»`);
+              done();
+            },
+            onStateChange: (ev) => {
+              // 0=ended 1=playing 2=paused 3=buffering 5=cued
+              const s = ev.data;
+              if (s === 1) { state.isPlaying = true; els.playBtn.textContent = '⏸'; state.consecutiveErrors = 0; }
+              else if (s === 2) { state.isPlaying = false; els.playBtn.textContent = '▶'; }
+              else if (s === 0) { state.isPlaying = false; els.playBtn.textContent = '▶'; onTrackEnded(); }
+            },
+            onError: (ev) => {
+              // 2=bad id, 5=html5 player err, 100=removed, 101/150=embed-blocked by label
+              const code = ev && ev.data;
+              const embedBlocked = code === 101 || code === 150;
+              done(new Error(embedBlocked ? 'лейбл запретил embed' : 'YouTube err ' + code));
+            },
+          },
+        });
+      } catch (e) { reject(e); }
+    });
+  }
+
+  // ---------- Unified play / navigation ----------
+  async function playItem(item, listHint) {
     state.currentId = item.id;
-    state.currentSource = source;
+    state.currentItem = item;
+    state.currentList = listHint;
     els.nowThumb.src = item.thumb || '';
     els.nowTitle.textContent = item.title;
     els.nowArtist.textContent = item.artist;
@@ -479,107 +679,139 @@
     renderResults(); renderPlaylist();
 
     const token = ++state.currentReqToken;
+
+    // stop the other source's player cleanly
+    if (item.source === SOURCES.YT) {
+      teardownHls();
+      try { els.audio.pause(); } catch {}
+      els.audio.removeAttribute('src');
+      els.audio.load();
+    } else {
+      stopYt();
+    }
+
     setStatus(`Граблю аудио «${item.title}»…`);
     try {
-      let transcoding = item.transcoding;
-      // Если плейлист был импортирован со старой версии — transcoding мог не сохраниться.
-      // Попробуем дёрнуть track по id заново.
-      if (!transcoding) {
-        const tr = await refetchTrack(item.id);
-        if (token !== state.currentReqToken) return;
-        const pick = pickHlsMp3Transcoding(tr);
-        if (!pick) throw new Error('у трека нет plain-HLS (DRM)');
-        transcoding = pick.url;
-        // запишем в playlist чтобы в следующий раз было быстрее
-        const pi = state.playlist.find((x) => x.id === item.id);
-        if (pi) { pi.transcoding = transcoding; savePlaylist(); }
+      if (item.source === SOURCES.YT) {
+        await playYouTube(item, token);
+      } else {
+        await playSoundCloud(item, token);
       }
-      const m3u8 = await resolveSCStream(transcoding);
       if (token !== state.currentReqToken) return;
-      try {
-        await attachPlaylistUrl(m3u8);
-      } catch (e) {
-        if (token !== state.currentReqToken) return;
-        onStreamError('Не удалось запустить'); return;
-      }
-      els.audio.volume = state.volume / 100;
-      els.quality.textContent = '128 kbps · mp3 · HLS';
-      setStatus(`Играю «${item.title}» (128 kbps · mp3)`);
     } catch (e) {
       if (token !== state.currentReqToken) return;
       console.error(e);
-      onStreamError('Не достал стрим');
+      const msg = (e && e.message) || 'ошибка';
+      if (/embed|piped|unreachable|bot|151?0?/i.test(msg)) {
+        onStreamError('Этот трек недоступен для плеера');
+      } else {
+        onStreamError('Не достал стрим');
+      }
     }
   }
 
-  async function refetchTrack(id) {
-    // Только если в сохранённом плейлисте нет `transcoding` — это может быть
-    // наследие старой версии. Ищем ровно этот track id; фоллбэк на `arr[0]`
-    // нельзя — поиск по числовому id у SoundCloud отдаёт левак.
-    const res = await fetchWithTimeout(`${API_BASE}/search?q=${encodeURIComponent(String(id))}&limit=10`, 10000);
-    if (!res.ok) throw new Error('track refetch HTTP ' + res.status);
-    const data = await res.json();
-    const arr = Array.isArray(data.collection) ? data.collection : [];
-    const hit = arr.find((t) => t.id === id);
-    if (!hit) throw new Error('track not found');
-    return hit;
-  }
-
-  function currentList() {
-    if (state.currentSource === 'playlist') return state.playlist;
-    if (state.currentSource === 'results') return state.results;
+  function listFor() {
+    if (state.currentList === 'playlist') return state.playlist;
+    if (state.currentList === 'results') return state.results;
     return [];
   }
 
-  function onTrackEnded() {
-    const list = currentList();
+  function currentIndex(list) {
+    if (!state.currentItem) return -1;
+    const key = itemKey(state.currentItem);
+    return list.findIndex((x) => itemKey(x) === key);
+  }
+
+  function autoAdvance() {
+    const list = listFor();
     if (!list.length) return;
-    const idx = list.findIndex((x) => x.id === state.currentId);
+    const idx = currentIndex(list);
     if (idx < 0) return;
-    let nextIdx = idx + 1;
+    const nextIdx = idx + 1;
     if (nextIdx >= list.length) {
-      if (state.loop && state.currentSource === 'playlist') nextIdx = 0;
-      else return;
+      if (state.loop && state.currentList === 'playlist') { playItem(list[0], state.currentList); return; }
+      setStatus('Доехали до конца списка.');
+      return;
     }
-    playItem(list[nextIdx], state.currentSource);
+    playItem(list[nextIdx], state.currentList);
+  }
+
+  function onTrackEnded() {
+    state.consecutiveErrors = 0;
+    autoAdvance();
   }
 
   function playPrev() {
-    const list = currentList();
-    if (list.length && state.currentId != null) {
-      const idx = list.findIndex((x) => x.id === state.currentId);
+    const list = listFor();
+    if (list.length && state.currentItem) {
+      const idx = currentIndex(list);
       let prev = idx - 1;
-      if (prev < 0) {
-        prev = (state.loop && state.currentSource === 'playlist') ? list.length - 1 : 0;
-      }
-      playItem(list[prev], state.currentSource);
+      if (prev < 0) prev = (state.loop && state.currentList === 'playlist') ? list.length - 1 : 0;
+      playItem(list[prev], state.currentList);
     } else if (state.playlist.length) {
       playItem(state.playlist[0], 'playlist');
     }
   }
   function playNext() {
-    const list = currentList();
-    if (list.length && state.currentId != null) {
-      const idx = list.findIndex((x) => x.id === state.currentId);
+    const list = listFor();
+    if (list.length && state.currentItem) {
+      const idx = currentIndex(list);
       let next = idx + 1;
-      if (next >= list.length) {
-        next = (state.loop && state.currentSource === 'playlist') ? 0 : list.length - 1;
-      }
-      playItem(list[next], state.currentSource);
+      if (next >= list.length) next = (state.loop && state.currentList === 'playlist') ? 0 : list.length - 1;
+      playItem(list[next], state.currentList);
     } else if (state.playlist.length) {
       playItem(state.playlist[0], 'playlist');
     }
   }
+
   function togglePlay() {
-    if (state.currentId == null) {
+    if (!state.currentItem) {
       if (state.playlist.length) playItem(state.playlist[0], 'playlist');
       return;
     }
-    if (els.audio.paused) { els.audio.play().catch(() => {}); }
-    else els.audio.pause();
+    if (state.currentItem.source === SOURCES.YT) {
+      const p = state.ytPlayer;
+      if (!p) return;
+      try {
+        const s = p.getPlayerState();
+        if (s === 1 || s === 3) p.pauseVideo(); else p.playVideo();
+      } catch {}
+    } else {
+      if (els.audio.paused) els.audio.play().catch(() => {});
+      else els.audio.pause();
+    }
   }
-  function updateLoopBtn() {
-    els.loopBtn.classList.toggle('active', state.loop);
+
+  function seekTo(pct) {
+    pct = Math.max(0, Math.min(1, pct));
+    if (state.currentItem && state.currentItem.source === SOURCES.YT) {
+      const p = state.ytPlayer;
+      if (!p) return;
+      try { const dur = p.getDuration() || 0; if (dur > 0) p.seekTo(dur * pct, true); } catch {}
+    } else {
+      const dur = els.audio.duration || 0;
+      if (dur > 0 && isFinite(dur)) { try { els.audio.currentTime = dur * pct; } catch {} }
+    }
+  }
+
+  function setVolume(v) {
+    state.volume = clampInt(v, 0, 100);
+    localStorage.setItem(LS_KEY_VOLUME, String(state.volume));
+    els.audio.volume = state.volume / 100;
+    if (state.ytPlayer) { try { state.ytPlayer.setVolume(state.volume); } catch {} }
+  }
+
+  function updateLoopBtn() { els.loopBtn.classList.toggle('active', state.loop); }
+
+  function applySourceToUi() {
+    els.sourceSel.value = state.source;
+    // Clear results when switching source — they refer to the previous provider.
+    state.results = [];
+    renderResults();
+    els.search.placeholder = state.source === SOURCES.YT
+      ? 'Ищем на YouTube Music — трек, артист, альбом…'
+      : 'Чё слушаем, бро? Забей трек, артиста, альбом…';
+    setStatus('');
   }
 
   // ---------- Wiring ----------
@@ -604,25 +836,22 @@
       els.importFile.value = '';
     });
 
-    els.seek.addEventListener('input', () => {
-      els.seek._dragging = true;
-      setRangeFill(els.seek);
-    });
+    els.seek.addEventListener('input', () => { els.seek._dragging = true; setRangeFill(els.seek); });
     els.seek.addEventListener('change', () => {
       els.seek._dragging = false;
-      const dur = els.audio.duration || 0;
-      if (dur > 0 && isFinite(dur)) {
-        const pct = parseInt(els.seek.value, 10) / 1000;
-        try { els.audio.currentTime = dur * pct; } catch {}
-      }
+      seekTo(parseInt(els.seek.value, 10) / 1000);
     });
     els.volume.value = state.volume;
     setRangeFill(els.volume);
     els.volume.addEventListener('input', () => {
-      state.volume = clampInt(els.volume.value, 0, 100);
-      localStorage.setItem(LS_KEY_VOLUME, String(state.volume));
+      setVolume(els.volume.value);
       setRangeFill(els.volume);
-      els.audio.volume = state.volume / 100;
+    });
+
+    els.sourceSel.addEventListener('change', () => {
+      state.source = els.sourceSel.value === SOURCES.YT ? SOURCES.YT : SOURCES.SC;
+      saveSource(state.source);
+      applySourceToUi();
     });
 
     document.addEventListener('keydown', (e) => {
@@ -635,8 +864,9 @@
 
   // ---------- Boot ----------
   initAudio();
+  applySourceToUi();
   wire();
-  renderResults();
   renderPlaylist();
   setStatus('');
+  updateLoopBtn();
 })();
