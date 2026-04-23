@@ -26,9 +26,9 @@ const PATHS = {
   repeat:
     '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   shuffle:
-    '<path d="M21 16V21h-5"/><path d="M21 21-9 9"/><path d="M15 3h6v6"/><path d="m3 3 18 18"/><path d="M14 14 21 7"/><path d="m3 3 7 7"/>',
+    '<path d="M16 3h5v5"/><polyline points="21 3 4 20"/><path d="M21 16v5h-5"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>',
   shuffle2:
-    '<path d="M2 18h1.9c.5 0 1-.3 1.2-.8L9 10"/><path d="M22 6h-1.9c-.5 0-1 .3-1.2.8L15 14"/><path d="m18 3 4 3-4 3"/><path d="m18 15 4 3-4 3"/><path d="M2 6h1.9c.5 0 1 .3 1.2.8L9 14"/>',
+    '<path d="M16 3h5v5"/><polyline points="21 3 4 20"/><path d="M21 16v5h-5"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>',
   plus:
     '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   close:

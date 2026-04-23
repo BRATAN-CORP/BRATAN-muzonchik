@@ -164,6 +164,56 @@ function hexParts(hex) {
     : [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 
+// Continuously sync CSS custom properties on `target` from the analyser's
+// low-band energy. Drives the fullscreen halo pulse + the artwork micro-scale.
+// Falls back to a slow sine breathing when no analyser data is available
+// (e.g. YouTube iframe).
+export function startBeatSync(target, { getAnalyser, isPlaying }) {
+  if (!target) return () => {};
+  let raf = null;
+  let stopped = false;
+  let t = 0;
+  let smoothedLow = 0;
+  let smoothedMid = 0;
+  function tick() {
+    if (stopped) return;
+    raf = requestAnimationFrame(tick);
+    t += 0.016;
+    const analyser = getAnalyser && getAnalyser();
+    const playing = !!(isPlaying && isPlaying());
+    let low = 0, mid = 0;
+    if (analyser) {
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      // 20–150 Hz ish — bass / kick.
+      let ls = 0, lc = 0;
+      for (let i = 1; i < 8 && i < data.length; i++) { ls += data[i]; lc++; }
+      low = lc ? ls / lc / 255 : 0;
+      // 500–2000 Hz — snare/vocal thwack.
+      let ms = 0, mc = 0;
+      for (let i = 12; i < 40 && i < data.length; i++) { ms += data[i]; mc++; }
+      mid = mc ? ms / mc / 255 : 0;
+    } else {
+      low = playing ? 0.35 + Math.sin(t * 2.2) * 0.18 : 0.2 + Math.sin(t * 1.2) * 0.08;
+      mid = playing ? 0.3 + Math.sin(t * 3.1 + 1) * 0.15 : 0.15;
+    }
+    smoothedLow = smoothedLow * 0.75 + low * 0.25;
+    smoothedMid = smoothedMid * 0.7 + mid * 0.3;
+
+    const beatScale = 1 + smoothedLow * 0.25;        // halo 1.00 → 1.25
+    const beatOpacity = 0.45 + smoothedLow * 0.5;    // 0.45 → 0.95
+    const artScale = 1 + smoothedLow * 0.04;         // artwork 1.00 → 1.04
+    const rowIntensity = Math.max(0.3, smoothedMid); // used by row EQ indicator
+
+    target.style.setProperty('--beat-scale', beatScale.toFixed(3));
+    target.style.setProperty('--beat-opacity', beatOpacity.toFixed(3));
+    target.style.setProperty('--art-scale', artScale.toFixed(3));
+    target.style.setProperty('--row-beat', rowIntensity.toFixed(3));
+  }
+  tick();
+  return () => { stopped = true; if (raf) cancelAnimationFrame(raf); };
+}
+
 if (typeof window !== 'undefined') {
-  window.BRATAN_VIZ = { startVisualizer, startRingPulse };
+  window.BRATAN_VIZ = { startVisualizer, startRingPulse, startBeatSync };
 }
