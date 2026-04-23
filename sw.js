@@ -1,10 +1,15 @@
 // БРАТАН-музончик service worker — минимальный оффлайн-shell + сеть для API.
-const CACHE = 'bratan-shell-v3';
+const CACHE = 'bratan-shell-v10';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
-  './app.js?v=5',
+  './app.js?v=10',
+  './assets/icons.js?v=10',
+  './assets/ui/router.js?v=10',
+  './assets/ui/audio-graph.js?v=10',
+  './assets/ui/visualizer.js?v=10',
+  './assets/ui/equalizer.js?v=10',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
