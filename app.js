@@ -182,6 +182,115 @@
     ));
   }
 
+  // ----- Cover helpers -----------------------------------------------------
+  // Stable pseudo-hash of a string → [0..1) — used to derive two deterministic
+  // hues for the liquid-glass fallback cover from an item's title+artist, so
+  // the fallback always looks the same for the same track.
+  function strHash(s) {
+    let h = 0;
+    for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return ((h >>> 0) % 1000) / 1000;
+  }
+  function coverColors(item) {
+    const seed = strHash((item && (item.title || '')) + '|' + (item && (item.artist || '')));
+    const h1 = Math.floor(seed * 360);
+    const h2 = (h1 + 60 + Math.floor(seed * 80)) % 360;
+    return {
+      c1: `hsl(${h1}, 70%, 55%)`,
+      c2: `hsl(${h2}, 70%, 50%)`,
+    };
+  }
+  function coverInitials(item) {
+    const t = (item && (item.title || '')).trim();
+    const a = (item && (item.artist || '')).trim();
+    if (t && a) {
+      return (t[0] + a[0]).toUpperCase();
+    }
+    const s = t || a || '?';
+    return s.slice(0, 2).toUpperCase();
+  }
+  function applyCover(imgEl, item, opts = {}) {
+    if (!imgEl) return;
+    const parent = imgEl.parentElement;
+    // Always rebuild the fallback so a cover change wipes any stale one.
+    if (parent) {
+      const prev = parent.querySelector('.cover-fallback');
+      if (prev) prev.remove();
+    }
+    const thumb = item && item.thumb;
+    if (thumb) {
+      imgEl.hidden = false;
+      imgEl.src = thumb;
+      imgEl.alt = item && (item.artist || item.title) || '';
+      imgEl.onerror = () => {
+        imgEl.onerror = null;
+        imgEl.removeAttribute('src');
+        imgEl.hidden = true;
+        attachFallback(parent, item);
+      };
+      return;
+    }
+    imgEl.hidden = true;
+    imgEl.removeAttribute('src');
+    attachFallback(parent, item);
+  }
+  // Apply a Telegram user's avatar to an <img>, falling back to a deterministic
+  // "initials on gradient" avatar when the user didn't expose a photo_url (rare
+  // but happens for users with a default avatar). No external Telegram API is
+  // hit — the Login Widget gives us photo_url directly on success, so this is
+  // purely a presentational fallback.
+  function applyTgAvatar(imgEl, user) {
+    if (!imgEl) return;
+    const wrap = imgEl.parentElement;
+    if (wrap) {
+      const prev = wrap.querySelector('.tg-avatar-fallback');
+      if (prev) prev.remove();
+    }
+    if (user && user.photo_url) {
+      imgEl.hidden = false;
+      imgEl.src = user.photo_url;
+      imgEl.alt = user.first_name || user.username || '';
+      imgEl.onerror = () => {
+        imgEl.onerror = null;
+        imgEl.removeAttribute('src');
+        imgEl.hidden = true;
+        attachTgFallback(wrap, user);
+      };
+      return;
+    }
+    imgEl.hidden = true;
+    imgEl.removeAttribute('src');
+    attachTgFallback(wrap, user);
+  }
+  function attachTgFallback(wrap, user) {
+    if (!wrap) return;
+    const seed = strHash(String((user && (user.username || user.first_name || user.id)) || '?'));
+    const h1 = Math.floor(seed * 360);
+    const h2 = (h1 + 45) % 360;
+    const el = document.createElement('span');
+    el.className = 'tg-avatar-fallback';
+    el.style.background = `linear-gradient(135deg, hsl(${h1}, 65%, 55%), hsl(${h2}, 65%, 50%))`;
+    const initial = ((user && (user.first_name || user.username)) || '?')
+      .trim().slice(0, 1).toUpperCase();
+    el.textContent = initial;
+    wrap.appendChild(el);
+  }
+
+  function attachFallback(parent, item) {
+    if (!parent) return;
+    const { c1, c2 } = coverColors(item || {});
+    const el = document.createElement('div');
+    el.className = 'cover-fallback';
+    el.style.setProperty('--c1', c1);
+    el.style.setProperty('--c2', c2);
+    el.setAttribute('aria-hidden', 'true');
+    const glyph = document.createElement('span');
+    glyph.className = 'glyph';
+    glyph.textContent = coverInitials(item || {});
+    el.appendChild(glyph);
+    parent.appendChild(el);
+  }
+
   // ----- Icon helpers ------------------------------------------------------
   function renderIcons(root) {
     if (window.BRATAN_ICONS) window.BRATAN_ICONS.hydrateIcons(root || document);
@@ -429,7 +538,17 @@
       : 'SoundCloud';
     setStatus(`Ищу на ${srcLabel}…`, { busy: true });
     try {
-      if (state.source === SOURCES.TD) {
+      // Note: every tab except "playlists" (SoundCloud-specific) is derived
+      // from the shared track search — albums/artists are grouped client-side
+      // from the Tidal/YouTube/SC track results. This keeps backend contract
+      // unchanged while still giving the user real album + artist cards.
+      if (state.resultTab === 'playlists' && state.source === SOURCES.SC) {
+        const raw = await searchScSets(q, 'playlists');
+        const sets = raw.map(normalizeScSet).filter((s) => s.id);
+        state.sets = sets; state.results = [];
+        renderSearchResults();
+        setStatus(sets.length ? `Найдено: ${sets.length} плейлистов.` : 'Не нашёл плейлистов.');
+      } else if (state.source === SOURCES.TD) {
         const raw = await searchTidal(q);
         const items = raw.map(normalizeTidalItem).filter(isOfficialTidal);
         state.results = items; state.sets = [];
@@ -446,7 +565,15 @@
         else if (!items.length) setStatus('Ничего не нашёл.');
         else if (state.officialOnly && dropped > 0) setStatus(`Найдено: ${items.length} · отсеял ${dropped}.`);
         else setStatus(`Найдено: ${items.length} треков (YouTube).`);
-      } else if (state.resultTab === 'tracks') {
+      } else if (state.resultTab === 'albums' && state.source === SOURCES.SC) {
+        // SoundCloud has a real album endpoint — prefer it over client grouping.
+        const raw = await searchScSets(q, 'albums');
+        const sets = raw.map(normalizeScSet).filter((s) => s.id);
+        state.sets = sets; state.results = [];
+        renderSearchResults();
+        setStatus(sets.length ? `Найдено: ${sets.length} альбомов.` : 'Не нашёл альбомов.');
+      } else {
+        // SoundCloud tracks path — also used to derive the "artists" tab.
         const raw = await searchSoundCloud(q);
         const passes = state.officialOnly ? isOfficialSCTrack : isPlayableSCTrack;
         const items = raw.filter(passes).map(normalizeSCTrack);
@@ -457,14 +584,6 @@
         else if (!items.length) setStatus('Ничего не нашёл.');
         else if (state.officialOnly && dropped > 0) setStatus(`Найдено: ${items.length} · отсеял ${dropped}.`);
         else setStatus(`Найдено: ${items.length} треков (SoundCloud).`);
-      } else {
-        const kind = state.resultTab; // 'albums' | 'playlists'
-        const raw = await searchScSets(q, kind);
-        const sets = raw.map(normalizeScSet).filter((s) => s.id);
-        state.sets = sets; state.results = [];
-        renderSearchResults();
-        const label = kind === 'albums' ? 'альбомов' : 'плейлистов';
-        setStatus(sets.length ? `Найдено: ${sets.length} ${label}.` : `Не нашёл ${label}.`);
       }
     } catch (e) {
       console.error(e);
@@ -487,7 +606,10 @@
 
   function fillRow(node, item, opts) {
     const img = node.querySelector('.thumb');
-    if (img) { img.src = item.thumb || ''; img.loading = 'lazy'; img.alt = ''; }
+    if (img) {
+      img.loading = 'lazy';
+      applyCover(img, item);
+    }
 
     const titleEl = node.querySelector('.title');
     titleEl.textContent = '';
@@ -617,7 +739,7 @@
     sets.forEach((s, idx) => {
       const node = tpl.content.firstElementChild.cloneNode(true);
       const img = node.querySelector('.thumb');
-      img.src = s.thumb || ''; img.loading = 'lazy';
+      if (img) { img.loading = 'lazy'; applyCover(img, { title: s.title, artist: s.artist, thumb: s.thumb }); }
       const idxCell = node.querySelector('.idx');
       if (idxCell) idxCell.textContent = String(idx + 1);
       node.querySelector('.title').textContent = s.title;
@@ -634,12 +756,129 @@
 
   function renderSearchResults() {
     const host = $('#resultsHost');
-    const tabs = $('#searchTabs');
     if (!host) return;
-    const showTabs = state.source === SOURCES.SC;
-    if (tabs) tabs.hidden = !showTabs;
-    if (state.sets && state.sets.length) renderSetList(host, state.sets);
-    else renderTrackList(host, state.results, 'results', { sortable: false });
+    if (state.resultTab === 'albums') {
+      if (state.sets && state.sets.length) {
+        renderSetList(host, state.sets);
+        return;
+      }
+      const albums = groupByAlbum(state.results || []);
+      if (!albums.length) {
+        host.innerHTML = '<div class="empty"><h3>Альбомы не найдены</h3><p>Попробуй другой запрос или переключи источник.</p></div>';
+        return;
+      }
+      renderAlbumGrid(host, albums);
+      return;
+    }
+    if (state.resultTab === 'artists') {
+      const artists = groupByArtist(state.results || []);
+      if (!artists.length) {
+        host.innerHTML = '<div class="empty"><h3>Артисты не найдены</h3><p>Попробуй другой запрос.</p></div>';
+        return;
+      }
+      renderArtistGrid(host, artists);
+      return;
+    }
+    if (state.sets && state.sets.length) {
+      renderSetList(host, state.sets);
+      return;
+    }
+    renderTrackList(host, state.results, 'results', { sortable: false });
+  }
+
+  // Group raw track results by album (falling back to a synthetic key built
+  // from the artist name + album title when the backend didn't give us IDs).
+  function groupByAlbum(items) {
+    const map = new Map();
+    for (const it of items) {
+      const key = it.albumId ? `${it.source}:${it.albumId}` : (it.album ? `${it.source}:${it.artist}::${it.album}` : null);
+      if (!key) continue;
+      if (!map.has(key)) {
+        map.set(key, {
+          id: it.albumId || `${it.artist}__${it.album}`,
+          source: it.source,
+          title: it.album || it.title,
+          artist: it.artist,
+          thumb: it.thumb,
+          tracks: [],
+        });
+      }
+      map.get(key).tracks.push(it);
+    }
+    return Array.from(map.values()).sort((a, b) => b.tracks.length - a.tracks.length);
+  }
+  function groupByArtist(items) {
+    const map = new Map();
+    for (const it of items) {
+      const key = it.artistId ? `${it.source}:${it.artistId}` : `${it.source}::${(it.artist || '').toLowerCase()}`;
+      if (!key) continue;
+      if (!map.has(key)) {
+        map.set(key, {
+          id: it.artistId || it.artist,
+          source: it.source,
+          name: it.artist,
+          thumb: it.thumb,
+          tracks: [],
+        });
+      }
+      map.get(key).tracks.push(it);
+    }
+    return Array.from(map.values()).sort((a, b) => b.tracks.length - a.tracks.length);
+  }
+  function renderAlbumGrid(host, albums) {
+    host.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    const tpl = document.getElementById('tpl-grid-card');
+    albums.forEach((al) => {
+      const node = tpl.content.firstElementChild.cloneNode(true);
+      const art = node.querySelector('.art');
+      const img = node.querySelector('.art img');
+      applyCover(img, { title: al.title, artist: al.artist, thumb: al.thumb });
+      node.querySelector('.title').textContent = al.title;
+      node.querySelector('.sub').textContent = `${al.artist} · ${al.tracks.length} трек.`;
+      const play = node.querySelector('.play-overlay');
+      if (play) play.addEventListener('click', (ev) => { ev.stopPropagation(); playItem(al.tracks[0], 'results'); });
+      art.addEventListener('click', () => openAlbumGroup(al));
+      grid.appendChild(node);
+    });
+    host.appendChild(grid);
+    renderIcons(host);
+  }
+  function renderArtistGrid(host, artists) {
+    host.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    const tpl = document.getElementById('tpl-grid-card');
+    artists.forEach((ar) => {
+      const node = tpl.content.firstElementChild.cloneNode(true);
+      node.classList.add('artist');
+      const art = node.querySelector('.art');
+      const img = node.querySelector('.art img');
+      applyCover(img, { title: ar.name, artist: ar.name, thumb: ar.thumb });
+      node.querySelector('.title').textContent = ar.name;
+      node.querySelector('.sub').textContent = `${ar.tracks.length} трек.`;
+      const play = node.querySelector('.play-overlay');
+      if (play) play.addEventListener('click', (ev) => { ev.stopPropagation(); playItem(ar.tracks[0], 'results'); });
+      art.addEventListener('click', () => openArtistForItem(ar.tracks[0]));
+      grid.appendChild(node);
+    });
+    host.appendChild(grid);
+    renderIcons(host);
+  }
+  function openAlbumGroup(al) {
+    // Tidal has a real album route; for the derived groups we just swap to the
+    // Tracks tab and filter results locally so the user sees that album's list.
+    if (al.source === SOURCES.TD && al.tracks[0] && al.tracks[0].albumId) {
+      window.BRATAN_ROUTER.navigate(`/album/${al.source}/${encodeURIComponent(al.tracks[0].albumId)}`);
+      return;
+    }
+    state.resultTab = 'tracks';
+    state.results = al.tracks;
+    state.sets = [];
+    mountPage(pageSearch());
+    wireSearchTabs();
+    renderSearchResults();
   }
 
   // ---------- Drag-and-drop playlist reordering ---------------------------
@@ -718,16 +957,19 @@
   }
 
   function pageSearch() {
-    const showTabs = state.source === SOURCES.SC;
+    // Three tabs visible for every source; "Плейлисты" only makes sense on
+    // SoundCloud so we hide it for Tidal/YouTube.
+    const showPlaylists = state.source === SOURCES.SC;
     return `
       <div class="section-head">
         <h2>Поиск</h2>
         <div class="status-bar is-idle" id="statusBar"><span class="dot"></span><span class="msg"></span></div>
       </div>
-      <div id="searchTabs" class="tabs" ${showTabs ? '' : 'hidden'} role="tablist" style="margin-bottom: var(--s-4);">
+      <div id="searchTabs" class="tabs" role="tablist" style="margin-bottom: var(--s-4);">
         <button class="tab ${state.resultTab === 'tracks' ? 'is-active' : ''}" data-tab="tracks" type="button">Треки</button>
         <button class="tab ${state.resultTab === 'albums' ? 'is-active' : ''}" data-tab="albums" type="button">Альбомы</button>
-        <button class="tab ${state.resultTab === 'playlists' ? 'is-active' : ''}" data-tab="playlists" type="button">Плейлисты</button>
+        <button class="tab ${state.resultTab === 'artists' ? 'is-active' : ''}" data-tab="artists" type="button">Артисты</button>
+        ${showPlaylists ? `<button class="tab ${state.resultTab === 'playlists' ? 'is-active' : ''}" data-tab="playlists" type="button">Плейлисты</button>` : ''}
       </div>
       <div id="resultsHost"></div>
     `;
@@ -1028,7 +1270,7 @@
         </div>
       </div>
     `;
-    card.querySelector('img').src = img;
+    applyCover(card.querySelector('img'), { title: f.item.title, artist: f.item.artist, thumb: img });
     card.querySelector('.featured-title').textContent = f.item.title;
     card.querySelector('.featured-artist').textContent = f.item.artist;
     card.querySelector('.pin-play').addEventListener('click', () => playItem(f.item, 'playlist'));
@@ -1524,7 +1766,7 @@
     state.currentItem = item;
     state.currentList = listHint;
 
-    els.nowThumb.src = item.thumb || '';
+    applyCover(els.nowThumb, item);
     els.nowTitle.textContent = item.title;
     els.nowArtist.textContent = item.artist;
     els.curTime.textContent = '0:00';
@@ -1533,8 +1775,9 @@
     if (els.fullSeek) { els.fullSeek.value = 0; setRangeFill(els.fullSeek); }
     setQualityBadge('');
 
-    // Fullscreen overlay reflect
-    if (els.fullArt && item.thumb) els.fullArt.src = item.thumb;
+    // Fullscreen overlay reflect — artwork, blurred background, derived accents.
+    applyCover(els.fullArt, item);
+    updateFullplayerBackground(item);
     if (els.fullTitle) els.fullTitle.textContent = item.title;
     if (els.fullArtist) els.fullArtist.textContent = item.artist;
     if (els.fullKicker) els.fullKicker.textContent = labelSource(item.source);
@@ -1682,12 +1925,46 @@
   }
 
   function startVisualizerIfNeeded() {
-    if (state.vizStop) return;
-    if (!els.vizCanvas || !window.BRATAN_VIZ) return;
-    state.vizStop = window.BRATAN_VIZ.startVisualizer(els.vizCanvas, {
-      getAnalyser: () => window.BRATAN_AUDIO ? window.BRATAN_AUDIO.getAnalyser() : null,
-      isPlaying: () => state.isPlaying,
-    });
+    if (!window.BRATAN_VIZ) return;
+    if (!state.vizStop && els.vizCanvas) {
+      state.vizStop = window.BRATAN_VIZ.startVisualizer(els.vizCanvas, {
+        getAnalyser: () => window.BRATAN_AUDIO ? window.BRATAN_AUDIO.getAnalyser() : null,
+        isPlaying: () => state.isPlaying,
+      });
+    }
+    if (!state.beatStop && window.BRATAN_VIZ.startBeatSync) {
+      // Drives CSS vars on <html> for the row eq-indicator, and on the
+      // fullplayer for the halo / artwork pulse.
+      state.beatStop = window.BRATAN_VIZ.startBeatSync(document.documentElement, {
+        getAnalyser: () => window.BRATAN_AUDIO ? window.BRATAN_AUDIO.getAnalyser() : null,
+        isPlaying: () => state.isPlaying,
+      });
+      if (els.fullplayer) {
+        state.beatStopFull = window.BRATAN_VIZ.startBeatSync(els.fullplayer, {
+          getAnalyser: () => window.BRATAN_AUDIO ? window.BRATAN_AUDIO.getAnalyser() : null,
+          isPlaying: () => state.isPlaying,
+        });
+      }
+    }
+  }
+
+  function updateFullplayerBackground(item) {
+    const bg = document.getElementById('fullBgImg');
+    if (!bg) return;
+    if (item && item.thumb) {
+      // Use the cover itself as the backdrop. Blur + darken is applied via CSS.
+      const safe = String(item.thumb).replace(/"/g, '%22');
+      bg.style.backgroundImage = `url("${safe}")`;
+    } else {
+      bg.style.backgroundImage = 'none';
+    }
+    // Also feed the halo colors off the deterministic hash, so each track has
+    // its own look even before we've had a chance to read the actual image.
+    const { c1, c2 } = coverColors(item || {});
+    if (els.fullplayer) {
+      els.fullplayer.style.setProperty('--cover-1', c1);
+      els.fullplayer.style.setProperty('--cover-2', c2);
+    }
   }
 
   function toggleEqPanel() {
@@ -1906,8 +2183,7 @@
       if (els.tgUserPill) els.tgUserPill.hidden = false;
       if (els.tgUserName) els.tgUserName.textContent = user.username ? '@' + user.username : (user.first_name || 'you');
       if (els.tgUserPhoto) {
-        if (user.photo_url) els.tgUserPhoto.src = user.photo_url;
-        else els.tgUserPhoto.removeAttribute('src');
+        applyTgAvatar(els.tgUserPhoto, user);
       }
       if (els.tgAdminBadge) els.tgAdminBadge.hidden = !ADMIN_TG_IDS.has(Number(user.id));
       if (els.payBtn) {

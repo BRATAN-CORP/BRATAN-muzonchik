@@ -43,7 +43,7 @@
     manifest-src 'self';
   " />
 
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=12" />
 </head>
 <body>
   <div class="app">
@@ -161,7 +161,7 @@
     <!-- Mini player ------------------------------------------------------- -->
     <footer class="player" id="player" aria-label="Плеер">
       <div class="now-playing">
-        <div id="nowArt" class="now-art" role="button" tabindex="0" aria-label="Открыть плеер на весь экран">
+        <div id="nowArt" class="now-art thumb-wrap" role="button" tabindex="0" aria-label="Открыть плеер на весь экран">
           <img id="nowThumb" alt="" />
         </div>
         <div class="now-meta">
@@ -225,6 +225,12 @@
 
   <!-- Fullscreen player overlay -->
   <section id="fullplayer" class="fullplayer" hidden aria-modal="true" role="dialog" aria-labelledby="fullTitle">
+    <div class="fullplayer-bg" aria-hidden="true">
+      <div id="fullBgImg" class="fullplayer-bg-img"></div>
+    </div>
+    <div class="fullplayer-beat" aria-hidden="true"></div>
+    <div class="fullplayer-beat beat-2" aria-hidden="true"></div>
+
     <header class="fullplayer-head">
       <button id="fullCloseBtn" class="icon-btn" type="button" aria-label="Свернуть плеер">
         <span class="icon" data-icon="chevronDown" data-icon-size="22"></span>
@@ -239,20 +245,15 @@
     </header>
     <div class="fullplayer-body">
       <div class="fullplayer-art-wrap">
-        <div class="fullplayer-art">
-          <div class="fullplayer-art-pulse" aria-hidden="true"></div>
+        <div class="fullplayer-art" id="fullArtShell">
           <img id="fullArt" alt="" />
         </div>
       </div>
       <div class="fullplayer-side">
         <div class="fullplayer-meta">
-          <div class="kicker">Трек</div>
+          <div class="kicker" id="fullKickerSide">Трек</div>
           <h1 id="fullTitle">—</h1>
           <div class="artist" id="fullArtist">—</div>
-        </div>
-
-        <div class="fullplayer-viz" aria-hidden="true">
-          <canvas id="vizCanvas"></canvas>
         </div>
 
         <div class="fullplayer-progress">
@@ -262,35 +263,36 @@
         </div>
 
         <div class="fullplayer-controls">
-          <button id="fullShuffle" class="icon-btn" type="button" aria-label="Перемешать">
-            <span class="icon" data-icon="shuffle2" data-icon-size="20"></span>
+          <button id="fullShuffle" class="icon-btn" type="button" aria-label="Перемешать" title="Перемешать">
+            <span class="icon" data-icon="shuffle" data-icon-size="22"></span>
           </button>
-          <button id="fullPrev" class="icon-btn icon-btn-lg" type="button" aria-label="Предыдущий">
-            <span class="icon" data-icon="skipBack" data-icon-size="24"></span>
+          <button id="fullPrev" class="icon-btn" type="button" aria-label="Предыдущий" title="Предыдущий">
+            <span class="icon" data-icon="skipBack" data-icon-size="26"></span>
           </button>
-          <button id="fullPlay" class="icon-btn icon-btn-lg icon-btn-accent" type="button" aria-label="Играть/пауза">
-            <span class="icon" data-icon="play" data-icon-size="28"></span>
+          <button id="fullPlay" class="icon-btn icon-btn-lg" type="button" aria-label="Играть/пауза" title="Играть / пауза">
+            <span class="icon" data-icon="play" data-icon-size="30"></span>
           </button>
-          <button id="fullNext" class="icon-btn icon-btn-lg" type="button" aria-label="Следующий">
-            <span class="icon" data-icon="skipForward" data-icon-size="24"></span>
+          <button id="fullNext" class="icon-btn" type="button" aria-label="Следующий" title="Следующий">
+            <span class="icon" data-icon="skipForward" data-icon-size="26"></span>
           </button>
-          <button id="fullLoop" class="icon-btn" type="button" aria-label="Повтор">
-            <span class="icon" data-icon="repeat" data-icon-size="20"></span>
+          <button id="fullLoop" class="icon-btn" type="button" aria-label="Повтор" title="Повтор">
+            <span class="icon" data-icon="repeat" data-icon-size="22"></span>
           </button>
         </div>
 
+        <div class="fullplayer-viz" aria-hidden="true">
+          <canvas id="vizCanvas"></canvas>
+        </div>
+
         <div class="fullplayer-tools">
-          <button id="fullEqBtn" class="btn btn-ghost btn-sm" type="button">
-            <span class="icon" data-icon="sliders" data-icon-size="16"></span>
-            Эквалайзер
+          <button id="fullEqBtn" class="icon-btn" type="button" title="Эквалайзер" aria-label="Эквалайзер">
+            <span class="icon" data-icon="sliders" data-icon-size="18"></span>
           </button>
-          <button id="fullArtistBtn" class="btn btn-ghost btn-sm" type="button">
-            <span class="icon" data-icon="user" data-icon-size="16"></span>
-            Об артисте
+          <button id="fullArtistBtn" class="icon-btn" type="button" title="Об артисте" aria-label="Об артисте">
+            <span class="icon" data-icon="user" data-icon-size="18"></span>
           </button>
-          <button id="fullAlbumBtn" class="btn btn-ghost btn-sm" type="button">
-            <span class="icon" data-icon="album" data-icon-size="16"></span>
-            Альбом
+          <button id="fullAlbumBtn" class="icon-btn" type="button" title="Альбом" aria-label="Альбом">
+            <span class="icon" data-icon="album" data-icon-size="18"></span>
           </button>
         </div>
 
@@ -333,7 +335,7 @@
     <li class="track-row" data-type="track">
       <span class="idx"></span>
       <span class="play-idx"><span class="icon" data-icon="play" data-icon-size="14"></span></span>
-      <img class="thumb" alt="" />
+      <span class="thumb-wrap"><img class="thumb" alt="" /></span>
       <div class="meta">
         <div class="title"></div>
         <div class="sub"></div>
@@ -350,7 +352,7 @@
     <li class="track-row sortable" data-type="playlist-item" draggable="true">
       <span class="handle" aria-label="Перетащи чтобы переставить"><span class="icon" data-icon="drag" data-icon-size="16"></span></span>
       <span class="play-idx"><span class="icon" data-icon="play" data-icon-size="14"></span></span>
-      <img class="thumb" alt="" />
+      <span class="thumb-wrap"><img class="thumb" alt="" /></span>
       <div class="meta">
         <div class="title"></div>
         <div class="sub"></div>
@@ -368,7 +370,7 @@
     <li class="track-row set-row" data-type="set">
       <span class="idx"></span>
       <span class="play-idx"><span class="icon" data-icon="album" data-icon-size="14"></span></span>
-      <img class="thumb" alt="" />
+      <span class="thumb-wrap"><img class="thumb" alt="" /></span>
       <div class="meta">
         <div class="title"></div>
         <div class="sub"></div>
@@ -392,11 +394,11 @@
 
   <!-- Scripts: hls.js CDN + our app modules ----------------------------- -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
-  <script type="module" src="assets/icons.js?v=10"></script>
-  <script type="module" src="assets/ui/router.js?v=10"></script>
-  <script type="module" src="assets/ui/audio-graph.js?v=10"></script>
-  <script type="module" src="assets/ui/visualizer.js?v=10"></script>
-  <script type="module" src="assets/ui/equalizer.js?v=10"></script>
-  <script src="app.js?v=10" defer></script>
+  <script type="module" src="assets/icons.js?v=12"></script>
+  <script type="module" src="assets/ui/router.js?v=12"></script>
+  <script type="module" src="assets/ui/audio-graph.js?v=12"></script>
+  <script type="module" src="assets/ui/visualizer.js?v=12"></script>
+  <script type="module" src="assets/ui/equalizer.js?v=12"></script>
+  <script src="app.js?v=12" defer></script>
 </body>
 </html>

@@ -27,7 +27,15 @@ const state = {
 };
 
 export function ensureGraph(audioEl) {
-  if (state.ctx) return state;
+  if (state.ctx) {
+    // Each call from a user gesture should nudge the context back to running.
+    // Otherwise browsers (Chrome/Safari) keep it suspended and no audio flows
+    // after the first Play click, forcing the user to click twice.
+    if (state.ctx.state === 'suspended') {
+      state.ctx.resume().catch(() => {});
+    }
+    return state;
+  }
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return null;
   try {
@@ -59,6 +67,11 @@ export function ensureGraph(audioEl) {
     state.analyser = analyser;
     state.firstInput = bands[0];
     state.lastOutput = analyser;
+
+    // Contexts start in 'suspended' on most browsers until a user gesture
+    // explicitly resumes them. ensureGraph() is only ever called from a
+    // gesture handler, so it's safe to kick it off here.
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
   } catch (e) {
     console.warn('AudioContext wiring failed — EQ/visualizer disabled', e);
     return null;

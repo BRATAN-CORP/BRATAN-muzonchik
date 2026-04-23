@@ -1,5 +1,5 @@
 // БРАТАН-музончик service worker — минимальный оффлайн-shell + сеть для API.
-const CACHE = 'bratan-shell-v10';
+const CACHE = 'bratan-shell-v12';
 const SHELL = [
   './',
   './index.html',
