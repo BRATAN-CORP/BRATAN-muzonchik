@@ -7,6 +7,10 @@ import {
   handleTidalTrack,
   handleTidalAudio,
   handleTidalDownload,
+  handleTidalAlbum,
+  handleTidalArtist,
+  handleTidalArtistsSearch,
+  handleTidalAlbumsSearch,
 } from "./tidal.js";
 import {
   handleTgLoginPoll,
@@ -450,6 +454,14 @@ export default {
         resp = await handleTidalHealth(env, ctx);
       } else if (url.pathname === "/tidal/search") {
         resp = await handleTidalSearch(url, env, ctx);
+      } else if (url.pathname === "/tidal/search/artists") {
+        resp = await handleTidalArtistsSearch(url, env, ctx);
+      } else if (url.pathname === "/tidal/search/albums") {
+        resp = await handleTidalAlbumsSearch(url, env, ctx);
+      } else if (url.pathname === "/tidal/album") {
+        resp = await handleTidalAlbum(url, env, ctx);
+      } else if (url.pathname === "/tidal/artist") {
+        resp = await handleTidalArtist(url, env, ctx);
       } else if (url.pathname === "/tidal/track") {
         resp = await handleTidalTrack(url, env, ctx);
       } else if (url.pathname === "/tidal/audio") {

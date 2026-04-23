@@ -195,9 +195,11 @@
     const seed = strHash((item && (item.title || '')) + '|' + (item && (item.artist || '')));
     const h1 = Math.floor(seed * 360);
     const h2 = (h1 + 60 + Math.floor(seed * 80)) % 360;
+    const h3 = (h1 + 200 + Math.floor(seed * 40)) % 360;
     return {
       c1: `hsl(${h1}, 70%, 55%)`,
       c2: `hsl(${h2}, 70%, 50%)`,
+      c3: `hsl(${h3}, 65%, 48%)`,
     };
   }
   function coverInitials(item) {
@@ -484,6 +486,33 @@
     };
   }
 
+  // Tidal card normalizers — these turn an album/artist response into the
+  // shape the grid-card renderer expects (id, title, artist, thumb, kind).
+  function normalizeTidalAlbumSet(a) {
+    if (!a || typeof a.id === 'undefined') return {};
+    return {
+      id: String(a.id),
+      title: (a.title || '').trim() || '(без названия)',
+      artist: (a.artist || (a.artists && a.artists[0]) || '').trim(),
+      thumb: a.cover || '',
+      trackCount: typeof a.numberOfTracks === 'number' ? a.numberOfTracks : 0,
+      kind: 'album',
+      source: SOURCES.TD,
+    };
+  }
+  function normalizeTidalArtistSet(a) {
+    if (!a || typeof a.id === 'undefined') return {};
+    return {
+      id: String(a.id),
+      title: (a.name || '').trim() || '(без имени)',
+      artist: '',
+      thumb: a.picture || '',
+      trackCount: 0,
+      kind: 'artist',
+      source: SOURCES.TD,
+    };
+  }
+
   // ================================================================ API ===
 
   async function searchSoundCloud(query) {
@@ -512,6 +541,35 @@
     }
     const data = await res.json();
     return Array.isArray(data.items) ? data.items : [];
+  }
+  // Tidal artist/album search — added so the UI can show real cards instead
+  // of client-side aggregated results.
+  async function searchTidalArtists(query) {
+    const url = `${API_BASE}/tidal/search/artists?q=${encodeURIComponent(query)}&limit=30`;
+    const res = await fetchWithTimeout(url, 15000);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.items) ? data.items : [];
+  }
+  async function searchTidalAlbums(query) {
+    const url = `${API_BASE}/tidal/search/albums?q=${encodeURIComponent(query)}&limit=30`;
+    const res = await fetchWithTimeout(url, 15000);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.items) ? data.items : [];
+  }
+  // Full-catalog fetchers for when the user drills into a card.
+  async function fetchTidalAlbum(id) {
+    const url = `${API_BASE}/tidal/album?id=${encodeURIComponent(id)}`;
+    const res = await fetchWithTimeout(url, 15000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+  async function fetchTidalArtist(id) {
+    const url = `${API_BASE}/tidal/artist?id=${encodeURIComponent(id)}`;
+    const res = await fetchWithTimeout(url, 15000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
   }
   async function searchScSets(query, kind) {
     const url = `${API_BASE}/sc/${kind}?q=${encodeURIComponent(query)}&limit=30`;
@@ -549,11 +607,27 @@
         renderSearchResults();
         setStatus(sets.length ? `Найдено: ${sets.length} плейлистов.` : 'Не нашёл плейлистов.');
       } else if (state.source === SOURCES.TD) {
-        const raw = await searchTidal(q);
-        const items = raw.map(normalizeTidalItem).filter(isOfficialTidal);
-        state.results = items; state.sets = [];
-        renderSearchResults();
-        setStatus(items.length ? `Найдено: ${items.length} треков (Tidal).` : 'Ничего не нашёл.');
+        // Route per-tab: albums/artists get real catalog cards from dedicated
+        // backend endpoints; tracks tab stays as the existing track search.
+        if (state.resultTab === 'albums') {
+          const raw = await searchTidalAlbums(q);
+          const sets = raw.map(normalizeTidalAlbumSet).filter((s) => s.id);
+          state.sets = sets; state.results = [];
+          renderSearchResults();
+          setStatus(sets.length ? `Найдено: ${sets.length} альбомов (Tidal).` : 'Не нашёл альбомов.');
+        } else if (state.resultTab === 'artists') {
+          const raw = await searchTidalArtists(q);
+          const sets = raw.map(normalizeTidalArtistSet).filter((s) => s.id);
+          state.sets = sets; state.results = [];
+          renderSearchResults();
+          setStatus(sets.length ? `Найдено: ${sets.length} артистов (Tidal).` : 'Не нашёл артистов.');
+        } else {
+          const raw = await searchTidal(q);
+          const items = raw.map(normalizeTidalItem).filter(isOfficialTidal);
+          state.results = items; state.sets = [];
+          renderSearchResults();
+          setStatus(items.length ? `Найдено: ${items.length} треков (Tidal).` : 'Ничего не нашёл.');
+        }
       } else if (state.source === SOURCES.YT) {
         const raw = await searchYouTube(q);
         const passes = state.officialOnly ? isOfficialYt : isPlayableYt;
@@ -746,8 +820,22 @@
       const countLabel = s.trackCount ? ` · ${s.trackCount} трек.` : '';
       node.querySelector('.sub').textContent = `${s.artist}${countLabel}`;
       const openBtn = node.querySelector('.open-set');
-      if (openBtn) openBtn.addEventListener('click', () => window.BRATAN_ROUTER.navigate(`/album/${SOURCES.SC}/${encodeURIComponent(s.id)}`));
-      node.addEventListener('dblclick', () => openScSet(s));
+      const src = s.source || SOURCES.SC;
+      const kind = s.kind || 'album';
+      const openRoute = () => {
+        if (src === SOURCES.TD && kind === 'artist') {
+          window.BRATAN_ROUTER.navigate(`/artist/td/${encodeURIComponent(s.id)}`);
+        } else if (src === SOURCES.TD) {
+          window.BRATAN_ROUTER.navigate(`/album/td/${encodeURIComponent(s.id)}`);
+        } else {
+          window.BRATAN_ROUTER.navigate(`/album/${SOURCES.SC}/${encodeURIComponent(s.id)}`);
+        }
+      };
+      if (openBtn) openBtn.addEventListener('click', openRoute);
+      node.addEventListener('dblclick', () => {
+        if (src === SOURCES.SC) openScSet(s);
+        else openRoute();
+      });
       ul.appendChild(node);
     });
     host.appendChild(ul);
@@ -771,6 +859,10 @@
       return;
     }
     if (state.resultTab === 'artists') {
+      if (state.sets && state.sets.length) {
+        renderSetList(host, state.sets);
+        return;
+      }
       const artists = groupByArtist(state.results || []);
       if (!artists.length) {
         host.innerHTML = '<div class="empty"><h3>Артисты не найдены</h3><p>Попробуй другой запрос.</p></div>';
@@ -1102,14 +1194,21 @@
 
     if (clean.startsWith('/artist/')) {
       const parts = clean.split('/').filter(Boolean);
-      // #/artist/<source>/<urlencoded-query>
+      // #/artist/<source>/<id-or-urlencoded-query>
       const src = parts[1] || 'soundcloud';
-      const q = parts[2] ? safeDecodeComponent(parts[2]) : '';
+      const raw = parts[2] ? safeDecodeComponent(parts[2]) : '';
+      // Tidal artist pages fetch the real catalog directly from the backend
+      // (top tracks + album list) instead of grouping unrelated search hits.
+      if (src === SOURCES.TD && parts[2]) {
+        mountPage(pageArtist({ src, q: parts[2] }));
+        loadTidalArtistIntoView(raw);
+        return;
+      }
       mountPage(pageArtist({ src, q: parts[2] || '' }));
-      if (els.search) els.search.value = q;
+      if (els.search) els.search.value = raw;
       state.source = src;
       if (els.sourceSel) els.sourceSel.value = src;
-      runSearch(q);
+      runSearch(raw);
       return;
     }
 
@@ -1119,6 +1218,7 @@
       const id = parts[2] ? safeDecodeComponent(parts[2]) : '';
       mountPage(pageAlbum({ src, id }));
       if (src === SOURCES.SC && id) loadScAlbumIntoView(id);
+      else if (src === SOURCES.TD && id) loadTidalAlbumIntoView(id);
       else {
         const title = $('#albumTitle');
         if (title) title.textContent = 'Недоступно';
@@ -1194,6 +1294,82 @@
     } catch (e) {
       if (title) title.textContent = 'Не смог открыть альбом';
       if (sub) sub.textContent = (e && e.message) || 'ошибка';
+    }
+  }
+
+  // Tidal-specific loaders for album/artist detail pages. Reuses the same
+  // markup (albumTitle / albumSub / resultsHost / albumActions) the SC loader
+  // uses so navigation feels identical regardless of source.
+  async function loadTidalAlbumIntoView(id) {
+    const title = $('#albumTitle');
+    const sub = $('#albumSub');
+    const actions = $('#albumActions');
+    const host = $('#resultsHost');
+    try {
+      const data = await fetchTidalAlbum(id);
+      const meta = data && data.album ? data.album : {};
+      if (title) title.textContent = meta.title || 'Альбом';
+      if (sub) sub.textContent = `${meta.artist || ''}${meta.numberOfTracks ? ' · ' + meta.numberOfTracks + ' трек.' : ''}`;
+      const tracks = (data && Array.isArray(data.tracks) ? data.tracks : []).map(normalizeTidalItem);
+      state.results = tracks;
+      if (host) renderTrackList(host, tracks, 'results', { sortable: false });
+      if (actions) {
+        actions.innerHTML = '';
+        const playBtn = document.createElement('button');
+        playBtn.className = 'btn btn-accent';
+        playBtn.innerHTML = iconSvg('play', 16) + ' <span>Играть</span>';
+        playBtn.addEventListener('click', () => { if (tracks.length) playItem(tracks[0], 'results'); });
+        actions.appendChild(playBtn);
+      }
+      renderIcons(els.view);
+    } catch (e) {
+      if (title) title.textContent = 'Не смог открыть альбом';
+      if (sub) sub.textContent = (e && e.message) || 'ошибка';
+    }
+  }
+
+  async function loadTidalArtistIntoView(id) {
+    const host = els.view;
+    try {
+      const data = await fetchTidalArtist(id);
+      const a = data && data.artist ? data.artist : {};
+      const topTracks = (data && Array.isArray(data.topTracks) ? data.topTracks : []).map(normalizeTidalItem);
+      const albums = (data && Array.isArray(data.albums) ? data.albums : []).map(normalizeTidalAlbumSet);
+      // The artist page already exists in markup; just populate its hero and
+      // results host. Title comes from pageArtist — override here with the
+      // real artist name.
+      const h1 = host.querySelector('h1');
+      if (h1) h1.textContent = a.name || 'Артист';
+      const p = host.querySelector('.page-sub');
+      if (p) p.textContent = `${topTracks.length ? topTracks.length + ' топ-треков' : ''}${albums.length ? ' · ' + albums.length + ' альбомов' : ''}` || 'Каталог Tidal';
+      const resultsHost = $('#resultsHost');
+      if (resultsHost) {
+        resultsHost.innerHTML = '';
+        if (topTracks.length) {
+          const h = document.createElement('h2');
+          h.className = 'section-title'; h.textContent = 'Топ-треки';
+          resultsHost.appendChild(h);
+          const top = document.createElement('div');
+          resultsHost.appendChild(top);
+          renderTrackList(top, topTracks, 'results', { sortable: false });
+        }
+        if (albums.length) {
+          const h = document.createElement('h2');
+          h.className = 'section-title';
+          h.style.marginTop = '24px';
+          h.textContent = 'Альбомы';
+          resultsHost.appendChild(h);
+          const albumsHost = document.createElement('div');
+          resultsHost.appendChild(albumsHost);
+          state.sets = albums;
+          renderSetList(albumsHost, albums);
+        }
+      }
+      state.results = topTracks;
+      renderIcons(els.view);
+    } catch (e) {
+      const resultsHost = $('#resultsHost');
+      if (resultsHost) resultsHost.innerHTML = `<div class="empty"><h3>Не смог открыть артиста</h3><p>${(e && e.message) || 'ошибка'}</p></div>`;
     }
   }
 
@@ -1470,8 +1646,12 @@
     els.audio.volume = state.volume / 100;
     els.audio.addEventListener('play', () => {
       state.isPlaying = true; reflectPlayingUi();
-      // Lazy wire the Web Audio graph (requires a user gesture for AudioContext).
-      ensureAudioGraph();
+      // Wiring the Web Audio graph here would happen *outside* a user gesture
+      // and Safari refuses to resume a suspended AudioContext in that case,
+      // which was why the Play button visually required two clicks before
+      // audio actually started — the first click resumed but the analyser
+      // never got a running ctx. The graph is now always set up synchronously
+      // in the click handlers below.
     });
     els.audio.addEventListener('playing', () => {
       state.isPlaying = true; reflectPlayingUi(); state.consecutiveErrors = 0;
@@ -1949,22 +2129,104 @@
   }
 
   function updateFullplayerBackground(item) {
-    const bg = document.getElementById('fullBgImg');
-    if (!bg) return;
+    // The Yandex-style aurora glow is fed from the artwork's real dominant
+    // colors — we sample the <img> pixels via canvas once it loads, and set
+    // --cover-1/-2/-3 on the fullplayer. Until that resolves (or when the
+    // image is cross-origin blocked) we fall back to the deterministic hash
+    // colors so the transition looks intentional instead of empty.
+    if (!els.fullplayer) return;
+    const hash = coverColors(item || {});
+    els.fullplayer.style.setProperty('--cover-1', hash.c1);
+    els.fullplayer.style.setProperty('--cover-2', hash.c2);
+    els.fullplayer.style.setProperty('--cover-3', hash.c3 || hash.c1);
+
     if (item && item.thumb) {
-      // Use the cover itself as the backdrop. Blur + darken is applied via CSS.
-      const safe = String(item.thumb).replace(/"/g, '%22');
-      bg.style.backgroundImage = `url("${safe}")`;
-    } else {
-      bg.style.backgroundImage = 'none';
+      extractCoverPalette(item.thumb).then((palette) => {
+        if (!palette || !palette.length) return;
+        const [a, b, c] = palette;
+        if (a) els.fullplayer.style.setProperty('--cover-1', a);
+        if (b) els.fullplayer.style.setProperty('--cover-2', b);
+        if (c || a) els.fullplayer.style.setProperty('--cover-3', c || a);
+      }).catch(() => {});
     }
-    // Also feed the halo colors off the deterministic hash, so each track has
-    // its own look even before we've had a chance to read the actual image.
-    const { c1, c2 } = coverColors(item || {});
-    if (els.fullplayer) {
-      els.fullplayer.style.setProperty('--cover-1', c1);
-      els.fullplayer.style.setProperty('--cover-2', c2);
+  }
+
+  // Cache of url → palette to avoid re-extracting on every play.
+  const _paletteCache = new Map();
+  function extractCoverPalette(url) {
+    if (!url) return Promise.resolve(null);
+    if (_paletteCache.has(url)) return Promise.resolve(_paletteCache.get(url));
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.decoding = 'async';
+      img.onload = () => {
+        try {
+          const palette = samplePalette(img);
+          _paletteCache.set(url, palette);
+          resolve(palette);
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+  // Quantize a loaded image into a small palette. Downsample the image to a
+  // 32×32 grid, bucket HSL quadrants, pick the three most-populated buckets,
+  // and return their average colors. Saturated colors are preferred over
+  // neutral gray via a simple score.
+  function samplePalette(img) {
+    const W = 32, H = 32;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(img, 0, 0, W, H);
+    let data;
+    try {
+      data = ctx.getImageData(0, 0, W, H).data;
+    } catch {
+      // Cross-origin tainted canvas — no palette, fall back to hash.
+      return null;
     }
+    const buckets = new Map();
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+      if (a < 200) continue;
+      // Skip near-black / near-white so we don't drown in background noise.
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      if (max < 24) continue;         // near-black
+      if (min > 232) continue;        // near-white
+      // Quantize to 4 bits per channel → 4096 buckets, but we dedupe into a
+      // coarser Map via rounding.
+      const qr = r >> 5, qg = g >> 5, qb = b >> 5;
+      const k = (qr << 10) | (qg << 5) | qb;
+      const cur = buckets.get(k) || { r: 0, g: 0, b: 0, n: 0 };
+      cur.r += r; cur.g += g; cur.b += b; cur.n += 1;
+      buckets.set(k, cur);
+    }
+    const arr = [];
+    buckets.forEach((v) => {
+      const rr = v.r / v.n, gg = v.g / v.n, bb = v.b / v.n;
+      const sat = Math.max(rr, gg, bb) - Math.min(rr, gg, bb);
+      // score = count × (1 + saturation bonus). Saturated hues win.
+      const score = v.n * (1 + (sat / 255) * 2);
+      arr.push({ r: rr, g: gg, b: bb, score });
+    });
+    arr.sort((a, b) => b.score - a.score);
+    const pick = [];
+    for (const c of arr) {
+      // Skip colors too close to an already-picked one (Euclidean in RGB).
+      if (pick.some((p) => Math.hypot(p.r - c.r, p.g - c.g, p.b - c.b) < 50)) continue;
+      pick.push(c);
+      if (pick.length >= 3) break;
+    }
+    while (pick.length < 3 && arr.length) pick.push(arr[pick.length] || arr[0]);
+    return pick.map(rgbToCss);
+  }
+  function rgbToCss(c) {
+    return `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
   }
 
   function toggleEqPanel() {
@@ -2016,8 +2278,18 @@
       }
     });
 
-    // Mini player controls
-    els.playBtn.addEventListener('click', () => { ensureAudioGraph(); togglePlay(); });
+    // Mini player controls.
+    // Note: the `click` handler immediately flips the icon optimistically so
+    // the button never *looks* unresponsive — the audio event listeners below
+    // still correct it if the play/pause promise actually fails.
+    const playClick = () => {
+      ensureAudioGraph();
+      const wasPaused = els.audio.paused;
+      togglePlay();
+      swapIcon(els.playBtn, wasPaused ? 'pause' : 'play', 20);
+      if (els.fullPlay) swapIcon(els.fullPlay, wasPaused ? 'pause' : 'play', 28);
+    };
+    els.playBtn.addEventListener('click', playClick);
     els.prevBtn.addEventListener('click', playPrev);
     els.nextBtn.addEventListener('click', playNext);
     els.loopBtn.addEventListener('click', () => {
@@ -2042,7 +2314,7 @@
     if (els.queueBtn) els.queueBtn.addEventListener('click', () => window.BRATAN_ROUTER.navigate('/library'));
 
     // Fullscreen controls mirror mini-player
-    if (els.fullPlay)    els.fullPlay.addEventListener('click', () => { ensureAudioGraph(); togglePlay(); });
+    if (els.fullPlay)    els.fullPlay.addEventListener('click', playClick);
     if (els.fullPrev)    els.fullPrev.addEventListener('click', playPrev);
     if (els.fullNext)    els.fullNext.addEventListener('click', playNext);
     if (els.fullShuffle) els.fullShuffle.addEventListener('click', shufflePlaylist);
@@ -2349,6 +2621,13 @@
     // AudioContext is only created after a user gesture, so the visualizer
     // falls back to a lovely idle sine wave until then.
     startVisualizerIfNeeded();
+
+    // Make sure the mini-player artwork has a fallback plate visible even
+    // before the user picks anything (otherwise <img> without a src renders
+    // as an empty white rectangle on iOS/Safari).
+    if (els.nowThumb && !els.nowThumb.getAttribute('src')) {
+      applyCover(els.nowThumb, { title: 'БРАТАН', artist: 'музончик' });
+    }
   }
 
   // If DOM is already ready (defer), boot synchronously.
