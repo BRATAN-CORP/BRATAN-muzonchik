@@ -225,9 +225,17 @@
 
   <!-- Fullscreen player overlay -->
   <section id="fullplayer" class="fullplayer" hidden aria-modal="true" role="dialog" aria-labelledby="fullTitle">
-    <div class="fullplayer-bg" aria-hidden="true">
-      <div id="fullBgImg" class="fullplayer-bg-img"></div>
-    </div>
+    <!-- Layer stack (back to front):
+         1. .fullplayer-bg          deep black base
+         2. .fullplayer-glow        huge radial "aurora" fed from the cover's
+                                    dominant colors — this is *the* effect the
+                                    user kept asking for (Yandex Music style).
+         3. .fullplayer-beat ×2     smaller color halos that pulse with the bass
+         4. .fullplayer-content     single centered column with cover + meta +
+                                    transport, same visual language as the web
+                                    player apps we're mimicking. -->
+    <div class="fullplayer-bg" aria-hidden="true"></div>
+    <div id="fullGlow" class="fullplayer-glow" aria-hidden="true"></div>
     <div class="fullplayer-beat" aria-hidden="true"></div>
     <div class="fullplayer-beat beat-2" aria-hidden="true"></div>
 
@@ -243,62 +251,62 @@
         <span class="icon" data-icon="dots" data-icon-size="22"></span>
       </button>
     </header>
-    <div class="fullplayer-body">
+
+    <main class="fullplayer-content">
       <div class="fullplayer-art-wrap">
         <div class="fullplayer-art" id="fullArtShell">
-          <img id="fullArt" alt="" />
+          <img id="fullArt" alt="" crossorigin="anonymous" />
         </div>
       </div>
-      <div class="fullplayer-side">
-        <div class="fullplayer-meta">
-          <div class="kicker" id="fullKickerSide">Трек</div>
-          <h1 id="fullTitle">—</h1>
-          <div class="artist" id="fullArtist">—</div>
-        </div>
 
-        <div class="fullplayer-progress">
-          <span id="fullCur" class="time">0:00</span>
-          <input id="fullSeek" class="slider" type="range" min="0" max="1000" value="0" step="1" aria-label="Перемотка" />
-          <span id="fullDur" class="time">0:00</span>
-        </div>
-
-        <div class="fullplayer-controls">
-          <button id="fullShuffle" class="icon-btn" type="button" aria-label="Перемешать" title="Перемешать">
-            <span class="icon" data-icon="shuffle" data-icon-size="22"></span>
-          </button>
-          <button id="fullPrev" class="icon-btn" type="button" aria-label="Предыдущий" title="Предыдущий">
-            <span class="icon" data-icon="skipBack" data-icon-size="26"></span>
-          </button>
-          <button id="fullPlay" class="icon-btn icon-btn-lg" type="button" aria-label="Играть/пауза" title="Играть / пауза">
-            <span class="icon" data-icon="play" data-icon-size="30"></span>
-          </button>
-          <button id="fullNext" class="icon-btn" type="button" aria-label="Следующий" title="Следующий">
-            <span class="icon" data-icon="skipForward" data-icon-size="26"></span>
-          </button>
-          <button id="fullLoop" class="icon-btn" type="button" aria-label="Повтор" title="Повтор">
-            <span class="icon" data-icon="repeat" data-icon-size="22"></span>
-          </button>
-        </div>
-
-        <div class="fullplayer-viz" aria-hidden="true">
-          <canvas id="vizCanvas"></canvas>
-        </div>
-
-        <div class="fullplayer-tools">
-          <button id="fullEqBtn" class="icon-btn" type="button" title="Эквалайзер" aria-label="Эквалайзер">
-            <span class="icon" data-icon="sliders" data-icon-size="18"></span>
-          </button>
-          <button id="fullArtistBtn" class="icon-btn" type="button" title="Об артисте" aria-label="Об артисте">
-            <span class="icon" data-icon="user" data-icon-size="18"></span>
-          </button>
-          <button id="fullAlbumBtn" class="icon-btn" type="button" title="Альбом" aria-label="Альбом">
-            <span class="icon" data-icon="album" data-icon-size="18"></span>
-          </button>
-        </div>
-
-        <div id="fullEqPanel" class="eq-panel" hidden></div>
+      <div class="fullplayer-meta">
+        <h1 id="fullTitle">—</h1>
+        <div class="artist" id="fullArtist">—</div>
       </div>
-    </div>
+
+      <div class="fullplayer-progress">
+        <span id="fullCur" class="time">0:00</span>
+        <input id="fullSeek" class="slider" type="range" min="0" max="1000" value="0" step="1" aria-label="Перемотка" />
+        <span id="fullDur" class="time">0:00</span>
+      </div>
+
+      <div class="fullplayer-controls">
+        <button id="fullShuffle" class="icon-btn" type="button" aria-label="Перемешать" title="Перемешать">
+          <span class="icon" data-icon="shuffle2" data-icon-size="20"></span>
+        </button>
+        <button id="fullPrev" class="icon-btn" type="button" aria-label="Предыдущий" title="Предыдущий">
+          <span class="icon" data-icon="skipBack" data-icon-size="24"></span>
+        </button>
+        <button id="fullPlay" class="icon-btn icon-btn-lg" type="button" aria-label="Играть/пауза" title="Играть / пауза">
+          <span class="icon" data-icon="play" data-icon-size="30"></span>
+        </button>
+        <button id="fullNext" class="icon-btn" type="button" aria-label="Следующий" title="Следующий">
+          <span class="icon" data-icon="skipForward" data-icon-size="24"></span>
+        </button>
+        <button id="fullLoop" class="icon-btn" type="button" aria-label="Повтор" title="Повтор">
+          <span class="icon" data-icon="repeat" data-icon-size="20"></span>
+        </button>
+      </div>
+
+      <div class="fullplayer-tools">
+        <button id="fullEqBtn" class="icon-btn icon-btn-sm" type="button" title="Эквалайзер" aria-label="Эквалайзер">
+          <span class="icon" data-icon="sliders" data-icon-size="16"></span>
+        </button>
+        <button id="fullArtistBtn" class="icon-btn icon-btn-sm" type="button" title="Об артисте" aria-label="Об артисте">
+          <span class="icon" data-icon="user" data-icon-size="16"></span>
+        </button>
+        <button id="fullAlbumBtn" class="icon-btn icon-btn-sm" type="button" title="Альбом" aria-label="Альбом">
+          <span class="icon" data-icon="album" data-icon-size="16"></span>
+        </button>
+      </div>
+
+      <div id="fullEqPanel" class="eq-panel" hidden></div>
+
+      <!-- Keep the canvas around for AnalyserNode binding (visualizer writes
+           to it even when hidden) but don't render it visually any more —
+           the aurora glow *is* the visualization now. -->
+      <canvas id="vizCanvas" hidden></canvas>
+    </main>
   </section>
 
   <!-- Paywall modal ----------------------------------------------------- -->

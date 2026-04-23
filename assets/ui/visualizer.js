@@ -200,13 +200,19 @@ export function startBeatSync(target, { getAnalyser, isPlaying }) {
     smoothedLow = smoothedLow * 0.75 + low * 0.25;
     smoothedMid = smoothedMid * 0.7 + mid * 0.3;
 
-    const beatScale = 1 + smoothedLow * 0.25;        // halo 1.00 → 1.25
-    const beatOpacity = 0.45 + smoothedLow * 0.5;    // 0.45 → 0.95
-    const artScale = 1 + smoothedLow * 0.04;         // artwork 1.00 → 1.04
-    const rowIntensity = Math.max(0.3, smoothedMid); // used by row EQ indicator
+    // The halo/aurora scale & opacity now react hard to bass hits so the
+    // full-screen glow visibly "breathes" with the song the way Yandex
+    // Music and Apple's lyrics view do — these multipliers were weaker
+    // before and the effect read as static on screen.
+    const beatScale   = 1 + smoothedLow * 0.45;                 // 1.00 → ~1.45
+    const beatOpacity = 0.55 + smoothedLow * 0.45;              // 0.55 → 1.0
+    const glowOpacity = 0.7 + smoothedLow * 0.25;               // 0.7 → 0.95
+    const artScale    = 1 + smoothedLow * 0.06;                 // subtle art bump
+    const rowIntensity = Math.max(0.3, smoothedMid);
 
     target.style.setProperty('--beat-scale', beatScale.toFixed(3));
     target.style.setProperty('--beat-opacity', beatOpacity.toFixed(3));
+    target.style.setProperty('--glow-opacity', glowOpacity.toFixed(3));
     target.style.setProperty('--art-scale', artScale.toFixed(3));
     target.style.setProperty('--row-beat', rowIntensity.toFixed(3));
   }
