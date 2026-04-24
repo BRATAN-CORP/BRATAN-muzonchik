@@ -1,150 +1,148 @@
 import { useEffect, useRef } from 'react';
-import { usePlayer } from '@/store/player';
-import { ensureGraph } from '@/lib/audio-graph';
-import { resolveSoundCloudStream } from '@/lib/api';
-import type { Track } from '@/lib/types';
+import { usePlayer, takePendingSeek } from '@/store/player';
+import { ensureGraph, setAllGains, setEqEnabled } from '@/lib/audio-graph';
+import {
+  gainsForPreset,
+  readEqEnabled,
+  readSelectedPreset,
+} from '@/lib/eq-presets';
+import { resolveSoundCloudStream, API_BASE } from '@/lib/api';
 
-// Single <audio> element at the app root. Keeps all playback state authority
-// in one place — the rest of the UI just drives it via the player store.
+// Owns the single <audio> element and the Web Audio graph. Mounted once
+// in the AppShell so playback survives route changes — this component has
+// no visual output, it's just state wiring.
+
 export function AudioHost() {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const hlsRef = useRef<{ destroy: () => void } | null>(null);
+  const ref = useRef<HTMLAudioElement | null>(null);
   const current = usePlayer((s) => s.current);
-  const volume = usePlayer((s) => s.volume);
   const isPlaying = usePlayer((s) => s.isPlaying);
+  const volume = usePlayer((s) => s.volume);
+  const muted = usePlayer((s) => s.muted);
+  const repeat = usePlayer((s) => s.repeat);
   const setIsPlaying = usePlayer((s) => s.setIsPlaying);
   const setTime = usePlayer((s) => s.setTime);
   const next = usePlayer((s) => s.next);
 
-  // Volume wire-up
+  // Seed the graph (and apply persisted EQ) on first user gesture. We can't
+  // create an AudioContext before a gesture on iOS Safari without it
+  // immediately suspending.
   useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = Math.max(0, Math.min(1, volume / 100));
-  }, [volume]);
+    const el = ref.current;
+    if (!el) return;
+    const bootstrap = () => {
+      if (!ensureGraph(el)) return;
+      setAllGains(gainsForPreset(readSelectedPreset()));
+      setEqEnabled(readEqEnabled());
+      window.removeEventListener('pointerdown', bootstrap);
+      window.removeEventListener('keydown', bootstrap);
+    };
+    window.addEventListener('pointerdown', bootstrap);
+    window.addEventListener('keydown', bootstrap);
+    return () => {
+      window.removeEventListener('pointerdown', bootstrap);
+      window.removeEventListener('keydown', bootstrap);
+    };
+  }, []);
 
-  // React to changes in the current track — load the source. SoundCloud
-  // needs its transcoding URL resolved first; Tidal lets the worker proxy
-  // the audio stream directly.
+  // Load the right stream URL whenever the current track changes.
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !current) return;
+    const el = ref.current;
+    if (!el || !current) return;
     let cancelled = false;
-
-    async function load(track: Track) {
-      const el = audioRef.current;
-      if (!el) return;
+    (async () => {
       try {
-        teardownHls();
-        if (track.source === 'tidal') {
-          el.src = `https://bratan-muzonchik.bratan-muzonchik.workers.dev/tidal/audio?id=${encodeURIComponent(
-            track.id
-          )}`;
-        } else if (track.source === 'soundcloud') {
-          const tc = track.transcoding as { url?: string } | undefined;
-          if (!tc?.url) throw new Error('нет transcoding url');
-          const streamUrl = await resolveSoundCloudStream(tc.url);
-          if (cancelled) return;
-          if (streamUrl.includes('.m3u8')) {
-            await playHls(el, streamUrl);
-          } else {
-            el.src = streamUrl;
+        let src = '';
+        if (current.source === 'tidal') {
+          src = `${API_BASE}/tidal/stream?id=${encodeURIComponent(current.id)}`;
+        } else if (current.source === 'soundcloud') {
+          const tc = current.transcoding as { url?: string } | undefined;
+          if (tc?.url) {
+            src = await resolveSoundCloudStream(tc.url);
           }
-        } else {
-          // YouTube audio isn't streamed through <audio> — a future iteration
-          // can wire the YouTube IFrame Player here. For now we simply skip
-          // to the next track.
-          next();
-          return;
         }
-        await el.play().catch(() => {});
-      } catch (err) {
-        console.warn('playback failed', err);
-        next();
+        if (cancelled || !src) return;
+        el.src = src;
+        el.currentTime = 0;
+        try {
+          await el.play();
+          setIsPlaying(true);
+        } catch {
+          /* autoplay blocked — leave to user gesture */
+        }
+      } catch {
+        if (!cancelled) setIsPlaying(false);
       }
-    }
-
-    load(current);
-
+    })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id, current?.source]);
 
-  // React to play/pause intent
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !current) return;
-    if (isPlaying) {
-      ensureGraph(audio);
-      audio.play().catch(() => {});
-    } else {
-      audio.pause();
-    }
-  }, [isPlaying, current]);
+    const el = ref.current;
+    if (!el || !current) return;
+    if (isPlaying) el.play().catch(() => setIsPlaying(false));
+    else el.pause();
+  }, [isPlaying, current, setIsPlaying]);
 
-  function teardownHls() {
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.destroy();
-      } catch {
-        /* ignore */
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.volume = Math.max(0, Math.min(1, volume / 100));
+    el.muted = muted || volume === 0;
+  }, [volume, muted]);
+
+  // Pending seek — consumed once, triggered by store.seekTo.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const handle = () => {
+      const s = takePendingSeek();
+      if (s != null) {
+        try {
+          el.currentTime = s;
+        } catch {
+          /* ignore */
+        }
       }
-      hlsRef.current = null;
-    }
-  }
-
-  async function playHls(audio: HTMLAudioElement, url: string) {
-    // Lazy-load hls.js from a pinned CDN to keep the main bundle small.
-    // Safari plays HLS natively, so we skip on those.
-    if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-      audio.src = url;
-      return;
-    }
-    type HlsCtor = new (opts?: unknown) => {
-      loadSource(u: string): void;
-      attachMedia(el: HTMLAudioElement): void;
-      destroy(): void;
-      on(event: string, cb: (...args: unknown[]) => void): void;
     };
-    type HlsMod = { default: HlsCtor & { isSupported(): boolean } };
-    // @ts-expect-error — dynamic CDN import, no local type package
-    const mod: HlsMod = await import(
-      /* @vite-ignore */ 'https://cdn.jsdelivr.net/npm/hls.js@1.6.0/dist/hls.esm.js'
-    );
-    if (!mod.default.isSupported()) {
-      audio.src = url;
-      return;
-    }
-    const hls = new mod.default();
-    hls.loadSource(url);
-    hls.attachMedia(audio);
-    hlsRef.current = hls;
-  }
+    const unsub = usePlayer.subscribe(handle);
+    return () => unsub();
+  }, []);
 
   return (
     <audio
-      ref={audioRef}
-      onPlay={() => {
-        setIsPlaying(true);
-        if (audioRef.current) ensureGraph(audioRef.current);
-      }}
-      onPause={() => setIsPlaying(false)}
-      onEnded={() => {
-        setIsPlaying(false);
-        next();
-      }}
-      onTimeUpdate={() => {
-        const a = audioRef.current;
-        if (!a) return;
-        setTime(a.currentTime || 0, a.duration || 0);
-      }}
-      onLoadedMetadata={() => {
-        const a = audioRef.current;
-        if (!a) return;
-        setTime(a.currentTime || 0, a.duration || 0);
-      }}
+      ref={ref}
       preload="metadata"
-      className="hidden"
+      crossOrigin="anonymous"
+      onPlay={() => setIsPlaying(true)}
+      onPause={() => {
+        const el = ref.current;
+        if (el && !el.ended) setIsPlaying(false);
+      }}
+      onTimeUpdate={(e) => {
+        const el = e.currentTarget;
+        setTime(el.currentTime || 0, el.duration || 0);
+      }}
+      onLoadedMetadata={(e) => {
+        const el = e.currentTarget;
+        setTime(el.currentTime || 0, el.duration || 0);
+      }}
+      onEnded={() => {
+        if (repeat === 'one') {
+          const el = ref.current;
+          if (el) {
+            el.currentTime = 0;
+            el.play().catch(() => setIsPlaying(false));
+          }
+        } else {
+          next();
+        }
+      }}
+      aria-hidden
+      tabIndex={-1}
+      className="sr-only"
     />
   );
 }

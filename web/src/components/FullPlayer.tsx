@@ -1,229 +1,296 @@
-import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { usePlayer } from '@/store/player';
-import { extractPalette } from '@/lib/palette';
-import { getAnalyser } from '@/lib/audio-graph';
-import { Cover } from './Cover';
-import { Button } from './ui/Button';
 import {
-  IconChevronDown,
-  IconMore,
-  IconNext,
-  IconPause,
-  IconPlay,
-  IconPrev,
-  IconRepeat,
-  IconShuffle,
-  IconSlider,
-} from './icons';
+  ChevronDown,
+  ListMusic,
+  Pause,
+  Play,
+  Repeat,
+  Repeat1,
+  Shuffle,
+  SkipBack,
+  SkipForward,
+  SlidersHorizontal,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import { useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { Button } from './ui/button';
+import { Slider } from './ui/slider';
+import { Sheet } from './ui/sheet';
+import { CoverGlow } from './CoverGlow';
+import { SoundVisualizer } from './SoundVisualizer';
+import { EqualizerPanel } from './EqualizerPanel';
+import { QueuePanel } from './QueuePanel';
+import { usePlayer } from '@/store/player';
+import { cn } from '@/lib/cn';
 
-// Fullscreen player. Single centered column, monochrome surface, pulsing
-// monochrome halo behind the artwork that tracks bass from the AnalyserNode.
-// No colorful gradients — the halo just fades fg-base in and out by volume.
-export function FullPlayer() {
-  const open = usePlayer((s) => s.fullOpen);
-  const close = usePlayer((s) => s.closeFull);
-  const current = usePlayer((s) => s.current);
-  const isPlaying = usePlayer((s) => s.isPlaying);
-  const setIsPlaying = usePlayer((s) => s.setIsPlaying);
-  const next = usePlayer((s) => s.next);
-  const prev = usePlayer((s) => s.prev);
-  const toggleShuffle = usePlayer((s) => s.toggleShuffle);
-  const toggleLoop = usePlayer((s) => s.toggleLoop);
-  const shuffle = usePlayer((s) => s.shuffle);
-  const loop = usePlayer((s) => s.loop);
-  const position = usePlayer((s) => s.position);
-  const duration = usePlayer((s) => s.duration);
-
-  const haloRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef<number | null>(null);
-  const [palette, setPalette] = useState<string[] | null>(null);
-
-  // Palette extraction — feeds the halo so it subtly reflects the cover art
-  // without introducing rainbow gradients. We only use a single dominant
-  // color at ~18% opacity so it always reads monochrome with a tint.
-  useEffect(() => {
-    if (!current?.thumb) {
-      setPalette(null);
-      return;
-    }
-    let cancelled = false;
-    extractPalette(current.thumb, 1).then((p) => {
-      if (!cancelled) setPalette(p);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [current?.thumb]);
-
-  // Beat-sync the halo
-  useEffect(() => {
-    if (!open) return;
-    const halo = haloRef.current;
-    if (!halo) return;
-    let smoothed = 0;
-    const tick = () => {
-      const analyser = getAnalyser();
-      let low = 0;
-      if (analyser && isPlaying) {
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(data);
-        let s = 0;
-        const n = Math.min(8, data.length);
-        for (let i = 1; i < n; i++) s += data[i];
-        low = n ? s / (n - 1) / 255 : 0;
-      } else {
-        low = isPlaying ? 0.28 + Math.sin(performance.now() / 550) * 0.12 : 0.18;
-      }
-      smoothed = smoothed * 0.75 + low * 0.25;
-      halo.style.setProperty('--halo-scale', (1 + smoothed * 0.35).toFixed(3));
-      halo.style.setProperty('--halo-opacity', (0.6 + smoothed * 0.35).toFixed(3));
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [open, isPlaying]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && open) close();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, close]);
-
-  const haloColor = palette?.[0] ?? 'var(--fg)';
-  const progress = duration > 0 ? (position / duration) * 100 : 0;
-
-  return (
-    <AnimatePresence>
-      {open && current && (
-        <motion.section
-          key="full"
-          initial={{ y: '100%', opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: '100%', opacity: 0 }}
-          transition={{ duration: 0.35, ease: [0.22, 0.61, 0.36, 1] }}
-          className="fixed inset-0 z-40 flex flex-col bg-bg-base text-fg-base isolate"
-          style={{
-            paddingTop: 'env(safe-area-inset-top)',
-            paddingBottom: 'env(safe-area-inset-bottom)',
-            paddingLeft: 'env(safe-area-inset-left)',
-            paddingRight: 'env(safe-area-inset-right)',
-            minHeight: '100svh',
-          }}
-          aria-modal
-          role="dialog"
-          aria-labelledby="full-title"
-        >
-          {/* Monochrome halo */}
-          <div
-            ref={haloRef}
-            aria-hidden
-            className="pointer-events-none absolute left-1/2 top-[38%] -z-10 size-[70vmin] -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl"
-            style={{
-              background: `radial-gradient(closest-side, ${haloColor} 0%, transparent 70%)`,
-              opacity: 'var(--halo-opacity, 0.65)',
-              transform: 'translate(-50%, -50%) scale(var(--halo-scale, 1))',
-              transition: 'transform 120ms linear, opacity 120ms linear, background 600ms ease',
-              mixBlendMode: 'screen',
-            }}
-          />
-
-          {/* Header */}
-          <header className="flex items-center justify-between px-5 pt-4">
-            <Button variant="icon" size="md" onClick={close} aria-label="Свернуть">
-              <IconChevronDown size={22} />
-            </Button>
-            <div className="text-center">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-fg-subtle">Сейчас играет</div>
-              <div className="text-xs text-fg-muted">{current.artist}</div>
-            </div>
-            <Button variant="icon" size="md" aria-label="Ещё">
-              <IconMore size={22} />
-            </Button>
-          </header>
-
-          {/* Single centered column */}
-          <main className="flex-1 flex flex-col items-center justify-center gap-6 px-5 pb-6 mx-auto w-full max-w-[640px] overflow-y-auto">
-            <div className="w-full max-w-[min(80vmin,440px)] aspect-square relative">
-              <Cover
-                src={current.thumb}
-                title={current.title}
-                artist={current.artist}
-                rounded="xl"
-                className="absolute inset-0 size-full shadow-float"
-              />
-            </div>
-
-            <div className="text-center">
-              <h1 id="full-title" className="text-xl sm:text-2xl md:text-3xl font-semibold tracking-tight text-balance">
-                {current.title}
-              </h1>
-              <p className="mt-1 text-sm text-fg-muted">{current.artist}</p>
-            </div>
-
-            <div className="w-full flex items-center gap-3">
-              <span className="text-xs tabular-nums text-fg-muted w-10 text-right">{fmt(position)}</span>
-              <div className="h-1 flex-1 rounded-full bg-border-base overflow-hidden">
-                <div className="h-full bg-fg-base transition-[width] duration-200" style={{ width: `${progress}%` }} />
-              </div>
-              <span className="text-xs tabular-nums text-fg-muted w-10">{fmt(duration)}</span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="icon"
-                size="md"
-                onClick={toggleShuffle}
-                className={shuffle ? 'text-[color:var(--accent)]' : undefined}
-                aria-label="Перемешать"
-              >
-                <IconShuffle size={20} />
-              </Button>
-              <Button variant="icon" size="lg" onClick={prev} aria-label="Предыдущий">
-                <IconPrev size={24} />
-              </Button>
-              <Button
-                variant="primary"
-                size="xl"
-                onClick={() => setIsPlaying(!isPlaying)}
-                aria-label={isPlaying ? 'Пауза' : 'Играть'}
-                className="rounded-full size-16"
-              >
-                {isPlaying ? <IconPause size={22} /> : <IconPlay size={22} />}
-              </Button>
-              <Button variant="icon" size="lg" onClick={next} aria-label="Следующий">
-                <IconNext size={24} />
-              </Button>
-              <Button
-                variant="icon"
-                size="md"
-                onClick={toggleLoop}
-                className={loop ? 'text-[color:var(--accent)]' : undefined}
-                aria-label="Повтор"
-              >
-                <IconRepeat size={20} />
-              </Button>
-            </div>
-
-            <div className="flex items-center gap-1 mt-2 text-fg-muted">
-              <Button variant="icon" size="sm" aria-label="Эквалайзер" onClick={() => usePlayer.getState().toggleEq()}>
-                <IconSlider size={18} />
-              </Button>
-            </div>
-          </main>
-        </motion.section>
-      )}
-    </AnimatePresence>
-  );
-}
-
-function fmt(sec: number): string {
-  if (!Number.isFinite(sec) || sec <= 0) return '0:00';
+function formatTime(sec: number) {
+  if (!Number.isFinite(sec) || sec < 0) return '0:00';
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+export function FullPlayer() {
+  const fullOpen = usePlayer((s) => s.fullOpen);
+  const closeFull = usePlayer((s) => s.closeFull);
+  const current = usePlayer((s) => s.current);
+  const isPlaying = usePlayer((s) => s.isPlaying);
+  const position = usePlayer((s) => s.position);
+  const duration = usePlayer((s) => s.duration);
+  const shuffle = usePlayer((s) => s.shuffle);
+  const repeat = usePlayer((s) => s.repeat);
+  const volume = usePlayer((s) => s.volume);
+  const muted = usePlayer((s) => s.muted);
+  const eqOpen = usePlayer((s) => s.eqOpen);
+  const queueOpen = usePlayer((s) => s.queueOpen);
+
+  const setIsPlaying = usePlayer((s) => s.setIsPlaying);
+  const seekTo = usePlayer((s) => s.seekTo);
+  const next = usePlayer((s) => s.next);
+  const prev = usePlayer((s) => s.prev);
+  const toggleShuffle = usePlayer((s) => s.toggleShuffle);
+  const cycleRepeat = usePlayer((s) => s.cycleRepeat);
+  const toggleMute = usePlayer((s) => s.toggleMute);
+  const setVolume = usePlayer((s) => s.setVolume);
+  const setEqOpen = usePlayer((s) => s.setEqOpen);
+  const setQueueOpen = usePlayer((s) => s.setQueueOpen);
+  const toggleEq = usePlayer((s) => s.toggleEq);
+  const toggleQueue = usePlayer((s) => s.toggleQueue);
+
+  // Escape closes the overlay; subpanels get priority via Sheet's own handler.
+  useEffect(() => {
+    if (!fullOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !eqOpen && !queueOpen) closeFull();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullOpen, eqOpen, queueOpen, closeFull]);
+
+  return (
+    <AnimatePresence>
+      {fullOpen && current && (
+        <motion.div
+          key="full"
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 24 }}
+          transition={{ duration: 0.28, ease: [0.22, 0.61, 0.36, 1] }}
+          className="fixed inset-0 z-40 bg-background text-foreground"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Полноэкранный плеер"
+        >
+          {/* Background glow layer (echo of cover) */}
+          <div className="absolute inset-0 -z-10 overflow-hidden">
+            <div className="absolute inset-0 opacity-60">
+              <CoverGlow src={current.thumb} title={current.title} artist={current.artist} pulse className="h-full w-full" />
+            </div>
+            <div className="absolute inset-0 bg-background/80 backdrop-blur-2xl" />
+          </div>
+
+          {/* Top bar */}
+          <div className="flex items-center justify-between gap-2 px-4 sm:px-8 pt-4 sm:pt-6">
+            <Button variant="ghost" size="icon-sm" aria-label="Свернуть плеер" onClick={closeFull}>
+              <ChevronDown size={18} />
+            </Button>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+              Сейчас играет
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={eqOpen}
+                aria-label="Эквалайзер"
+                onClick={toggleEq}
+                className={eqOpen ? 'text-accent' : ''}
+              >
+                <SlidersHorizontal size={16} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={queueOpen}
+                aria-label="Очередь"
+                onClick={toggleQueue}
+                className={queueOpen ? 'text-accent' : ''}
+              >
+                <ListMusic size={16} />
+              </Button>
+            </div>
+          </div>
+
+          {/* Main content */}
+          <div className="mx-auto max-w-[820px] px-5 sm:px-8 pb-8 pt-2 sm:pt-4 flex flex-col items-center gap-6 h-[calc(100%-72px)] overflow-y-auto">
+            <CoverGlow
+              src={current.thumb}
+              title={current.title}
+              artist={current.artist}
+              pulse={isPlaying}
+              className="w-full"
+            />
+
+            <div className="w-full text-center">
+              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-balance">
+                {current.title}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {current.artistId ? (
+                  <Link
+                    to={`/artist/td/${encodeURIComponent(current.artistId)}`}
+                    className="hover:text-foreground hover:underline"
+                    onClick={closeFull}
+                  >
+                    {current.artist}
+                  </Link>
+                ) : (
+                  current.artist
+                )}
+                {current.album && current.albumId && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <Link
+                      to={`/album/td/${encodeURIComponent(current.albumId)}`}
+                      className="hover:text-foreground hover:underline"
+                      onClick={closeFull}
+                    >
+                      {current.album}
+                    </Link>
+                  </>
+                )}
+              </p>
+            </div>
+
+            {/* Visualizer */}
+            <div className="w-full h-20 sm:h-24 rounded-xl hairline overflow-hidden bg-card/60">
+              <SoundVisualizer active={isPlaying} />
+            </div>
+
+            {/* Progress */}
+            <div className="w-full flex items-center gap-3">
+              <span className="text-[11px] tabular-nums text-muted-foreground w-10 text-right">
+                {formatTime(position)}
+              </span>
+              <Slider
+                className="flex-1"
+                value={duration > 0 ? position : 0}
+                min={0}
+                max={duration > 0 ? duration : 1}
+                step={1}
+                onChange={(v) => seekTo(v)}
+                aria-label="Позиция воспроизведения"
+              />
+              <span className="text-[11px] tabular-nums text-muted-foreground w-10">
+                {formatTime(duration)}
+              </span>
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={shuffle}
+                onClick={toggleShuffle}
+                aria-label={shuffle ? 'Выключить shuffle' : 'Включить shuffle'}
+                className={shuffle ? 'text-accent' : ''}
+              >
+                <Shuffle size={16} />
+              </Button>
+              <Button variant="ghost" size="icon-lg" aria-label="Предыдущий" onClick={prev}>
+                <SkipBack size={22} fill="currentColor" />
+              </Button>
+              <Button
+                variant="default"
+                size="icon-xl"
+                aria-label={isPlaying ? 'Пауза' : 'Играть'}
+                onClick={() => setIsPlaying(!isPlaying)}
+              >
+                {isPlaying ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" />}
+              </Button>
+              <Button variant="ghost" size="icon-lg" aria-label="Следующий" onClick={next}>
+                <SkipForward size={22} fill="currentColor" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Режим повтора"
+                aria-pressed={repeat !== 'off'}
+                onClick={cycleRepeat}
+                className={repeat !== 'off' ? 'text-accent' : ''}
+              >
+                {repeat === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />}
+              </Button>
+            </div>
+
+            {/* Volume (desktop) */}
+            <div className="hidden md:flex w-full max-w-sm items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={muted ? 'Включить звук' : 'Выключить звук'}
+                onClick={toggleMute}
+              >
+                {muted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              </Button>
+              <Slider
+                value={muted ? 0 : volume}
+                min={0}
+                max={100}
+                step={1}
+                onChange={(v) => setVolume(v)}
+                aria-label="Громкость"
+              />
+            </div>
+          </div>
+
+          {/* Side sheets */}
+          <Sheet open={eqOpen} onOpenChange={setEqOpen} side="right" labelledBy="eq-title">
+            <div className={cn('flex flex-col h-full')}>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h2 id="eq-title" className="text-base font-semibold tracking-tight">
+                  Эквалайзер
+                </h2>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Закрыть эквалайзер"
+                  onClick={() => setEqOpen(false)}
+                >
+                  <ChevronDown size={16} />
+                </Button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5">
+                <EqualizerPanel />
+              </div>
+            </div>
+          </Sheet>
+
+          <Sheet open={queueOpen} onOpenChange={setQueueOpen} side="right" labelledBy="queue-title">
+            <div className={cn('flex flex-col h-full')}>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h2 id="queue-title" className="text-base font-semibold tracking-tight">
+                  Очередь
+                </h2>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Закрыть очередь"
+                  onClick={() => setQueueOpen(false)}
+                >
+                  <ChevronDown size={16} />
+                </Button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3">
+                <QueuePanel />
+              </div>
+            </div>
+          </Sheet>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 }

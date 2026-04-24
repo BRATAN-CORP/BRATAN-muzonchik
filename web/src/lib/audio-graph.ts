@@ -1,6 +1,13 @@
 // MediaElementSource → BiquadFilter[10] → AnalyserNode → destination.
-// Lazy-initialized on first user gesture because browsers (Safari especially)
-// will otherwise keep the AudioContext suspended.
+//
+// Created lazily on the first user gesture so that Safari, which starts
+// AudioContexts suspended, doesn't silently drop the graph. The filters are
+// always connected — when the user toggles the EQ off we just zero the
+// gains on every band without tearing the graph down, which avoids
+// re-creating a MediaElementSource for the same <audio> element (the API
+// forbids that and throws InvalidStateError).
+
+import type { EqGains } from './eq-presets';
 
 export const EQ_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000] as const;
 
@@ -10,6 +17,7 @@ interface GraphState {
   analyser: AnalyserNode | null;
   bands: BiquadFilterNode[];
   enabled: boolean;
+  saved: number[];
 }
 
 const state: GraphState = {
@@ -18,6 +26,7 @@ const state: GraphState = {
   analyser: null,
   bands: [],
   enabled: true,
+  saved: new Array(EQ_FREQS.length).fill(0),
 };
 
 export function ensureGraph(audioEl: HTMLAudioElement): GraphState | null {
@@ -41,7 +50,7 @@ export function ensureGraph(audioEl: HTMLAudioElement): GraphState | null {
       return node;
     });
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
+    analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.82;
 
     source.connect(bands[0]);
@@ -67,26 +76,35 @@ export function getAnalyser(): AnalyserNode | null {
 }
 
 export function setBandGain(i: number, db: number) {
-  const node = state.bands[i];
-  if (!node) return;
   const clamped = Math.max(-12, Math.min(12, Number(db) || 0));
-  node.gain.value = state.enabled ? clamped : 0;
-  (node as BiquadFilterNode & { _saved?: number })._saved = clamped;
+  state.saved[i] = clamped;
+  const node = state.bands[i];
+  if (node) node.gain.value = state.enabled ? clamped : 0;
 }
 
 export function getBandGain(i: number): number {
-  const node = state.bands[i] as (BiquadFilterNode & { _saved?: number }) | undefined;
-  return node?._saved ?? node?.gain.value ?? 0;
+  return state.saved[i] ?? 0;
+}
+
+export function setAllGains(gains: EqGains) {
+  gains.forEach((g, i) => setBandGain(i, g));
+}
+
+export function getAllGains(): number[] {
+  return state.saved.slice();
 }
 
 export function setEqEnabled(on: boolean) {
   state.enabled = !!on;
-  state.bands.forEach((b) => {
-    const saved = (b as BiquadFilterNode & { _saved?: number })._saved ?? 0;
-    b.gain.value = state.enabled ? saved : 0;
+  state.bands.forEach((b, i) => {
+    b.gain.value = state.enabled ? state.saved[i] ?? 0 : 0;
   });
 }
 
 export function isEqEnabled() {
   return state.enabled;
+}
+
+export function isGraphReady() {
+  return !!state.ctx;
 }
