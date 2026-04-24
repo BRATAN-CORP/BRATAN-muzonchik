@@ -6,40 +6,37 @@ interface SidebarProps {
   className?: string;
 }
 
-// Desktop-only navigation rail. On mobile we hide this and use the
-// bottom MobileNav instead — so we don't try to combine two navigations
-// into a single "responsive" component that breaks in the middle.
+// Desktop-only navigation rail. Strict hairline composition — no
+// gradient halo on the brand mark.
 export function Sidebar({ className }: SidebarProps) {
   return (
     <aside
       className={cn(
-        'hidden lg:flex flex-col gap-2 w-[248px] shrink-0 h-full',
+        'hidden lg:flex flex-col gap-2 w-[232px] shrink-0 h-full',
         'bg-sidebar text-sidebar-foreground border-r border-sidebar-border',
-        'p-4',
+        'p-3',
         className,
       )}
     >
       <Link
         to="/"
-        className="inline-flex items-center gap-2 px-2 py-3 text-[15px] font-semibold tracking-tight"
+        className="inline-flex items-center gap-2 px-2 py-3 text-[14px] font-semibold tracking-tight hover:text-accent transition-colors duration-150"
       >
         <span
           aria-hidden
-          className="inline-flex size-7 items-center justify-center rounded-md bg-accent text-accent-foreground shadow-soft"
-        >
-          <span className="text-[11px] font-bold">БР</span>
-        </span>
-        <span>БРАТАН<span className="brand-dot" aria-hidden /></span>
+          className="inline-block size-[14px] rounded-[4px] bg-accent"
+        />
+        <span>БРАТАН-музончик</span>
       </Link>
 
-      <nav className="mt-2 flex flex-col gap-0.5" aria-label="Основная навигация">
-        <NavItem to="/" icon={<Home size={16} />} label="Главная" end />
-        <NavItem to="/search" icon={<Search size={16} />} label="Поиск" />
-        <NavItem to="/library" icon={<Library size={16} />} label="Библиотека" />
+      <nav className="mt-1 flex flex-col gap-[2px]" aria-label="Основная навигация">
+        <NavItem to="/" icon={<Home size={14} strokeWidth={1.5} />} label="Главная" end />
+        <NavItem to="/search" icon={<Search size={14} strokeWidth={1.5} />} label="Поиск" />
+        <NavItem to="/library" icon={<Library size={14} strokeWidth={1.5} />} label="Библиотека" />
       </nav>
 
-      <div className="mt-auto px-2 pb-2 text-[11px] text-muted-foreground">
-        Минималистичный плеер. Один дизайн-язык на всех поверхностях.
+      <div className="mt-auto px-2 pb-2 text-[11px] text-muted-foreground leading-4">
+        Один акцент, один шрифт, один дизайн-язык.
       </div>
     </aside>
   );
@@ -62,17 +59,19 @@ function NavItem({
       end={end}
       className={({ isActive }) =>
         cn(
-          'group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar',
+          'group flex items-center gap-2.5 rounded-[8px] px-3 py-2 text-[12px] transition-colors duration-150',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
           isActive
-            ? 'bg-secondary text-foreground'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/70',
+            ? 'bg-[rgba(60,130,255,0.12)] text-foreground'
+            : 'text-muted-foreground hover:text-foreground hover:bg-[rgba(255,255,255,0.04)]',
         )
       }
     >
       {({ isActive }) => (
         <>
-          <span aria-hidden>{icon}</span>
+          <span aria-hidden className={cn(isActive ? 'text-accent' : '')}>
+            {icon}
+          </span>
           <span aria-current={isActive ? 'page' : undefined}>{label}</span>
         </>
       )}

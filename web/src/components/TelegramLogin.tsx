@@ -1,13 +1,14 @@
 import { Send } from 'lucide-react';
-import { Button } from './ui/button';
 import { useAuth } from '@/store/auth';
 import { Cover } from './Cover';
 import { cn } from '@/lib/cn';
 
-// Inline widget shown in the sidebar / topbar. Handles the deep-link
-// handshake end-to-end and surfaces pending + error states without
-// dropping into a modal dialog.
-export function TelegramLogin({ compact = false }: { compact?: boolean }) {
+type Placement = 'inline' | 'topbar';
+
+// Compact Telegram login widget. Lives in the top-right corner by default
+// (placement="topbar") and collapses to avatar + "Выйти" once the user
+// signs in. Handles the deep-link handshake; no modal.
+export function TelegramLogin({ placement = 'topbar' }: { placement?: Placement }) {
   const user = useAuth((s) => s.user);
   const pending = useAuth((s) => s.pendingToken);
   const error = useAuth((s) => s.pollError);
@@ -20,51 +21,71 @@ export function TelegramLogin({ compact = false }: { compact?: boolean }) {
       [user.first_name, user.last_name].filter(Boolean).join(' ') ||
       (user.username ? `@${user.username}` : `TG ${user.id}`);
     return (
-      <div className={cn('flex items-center gap-3', compact ? 'w-full' : 'w-full')}>
+      <div className={cn('flex items-center gap-2', placement === 'topbar' && 'max-w-[220px]')}>
         <Cover
           src={user.photo_url ?? undefined}
           title={label}
           rounded="full"
-          className="size-8 shrink-0"
+          className="size-7 shrink-0"
           alt={label}
         />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm text-foreground">{label}</div>
+        <div className="min-w-0 hidden md:block">
+          <div className="truncate text-[12px] leading-4 text-foreground">{label}</div>
           {user.username && (
-            <div className="truncate text-[11px] text-muted-foreground">@{user.username}</div>
+            <div className="truncate text-[10px] leading-3 text-muted-foreground">@{user.username}</div>
           )}
         </div>
-        <Button variant="ghost" size="sm" onClick={signOut} aria-label="Выйти">
+        <button
+          type="button"
+          onClick={signOut}
+          aria-label="Выйти"
+          className="h-7 px-2 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-[rgba(255,255,255,0.06)] transition-colors duration-150"
+        >
           Выйти
-        </Button>
+        </button>
       </div>
     );
   }
 
   if (pending) {
     return (
-      <div className="flex flex-col gap-2 hairline rounded-lg p-3">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="soft-spin inline-block size-3 rounded-full border-2 border-border border-t-foreground" aria-hidden />
-          <span className="text-foreground">Ждём подтверждение в Telegram…</span>
-        </div>
-        <div className="text-xs text-muted-foreground">
-          Нажми <b>Start</b> в открывшемся чате с ботом.
-        </div>
-        <Button variant="ghost" size="sm" onClick={cancel}>
+      <div className="flex items-center gap-2">
+        <span
+          className="soft-spin inline-block size-3 rounded-full border-[1.5px] border-[rgba(255,255,255,0.2)] border-t-foreground"
+          aria-hidden
+        />
+        <span className="hidden md:inline text-[11px] text-muted-foreground">Ждём Telegram…</span>
+        <button
+          type="button"
+          onClick={cancel}
+          className="h-7 px-2 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-[rgba(255,255,255,0.06)] transition-colors duration-150"
+        >
           Отмена
-        </Button>
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <Button variant="accent" size="md" onClick={startLogin}>
-        <Send size={14} />
-        Войти через Telegram
-      </Button>
-      {error && <div className="text-xs text-destructive">{error}</div>}
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={startLogin}
+        className={cn(
+          'inline-flex items-center gap-2 h-8 px-3 rounded-md text-[12px] font-medium',
+          'bg-accent text-accent-foreground',
+          'border border-[rgba(255,255,255,0.1)]',
+          'hover:bg-[color:color-mix(in_oklab,var(--accent)_88%,white_12%)]',
+          'transition-colors duration-150',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+        )}
+        aria-label="Войти через Telegram"
+      >
+        <Send size={13} strokeWidth={1.5} />
+        <span className="hidden sm:inline">Войти через Telegram</span>
+        <span className="inline sm:hidden">Войти</span>
+      </button>
+      {error && <span className="hidden md:inline text-[10px] text-destructive">{error}</span>}
     </div>
   );
 }

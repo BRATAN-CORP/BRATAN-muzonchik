@@ -3,9 +3,9 @@ import { useAuth } from '@/store/auth';
 import { TG_BOT_USERNAME, SUB_PRICE_STARS, SUB_PERIOD_DAYS } from '@/lib/constants';
 import { cn } from '@/lib/cn';
 
-// CTA card. Playback gating lives in the worker — this banner just
-// surfaces the Telegram Stars invoice and hides itself when an active
-// subscription is detected client-side.
+// Strict glass CTA — no radial glow. Hidden once an active subscription
+// or admin flag is detected client-side. Playback gating happens server-
+// side in the worker; this is just the marketing surface.
 export function PaywallBanner({ className }: { className?: string }) {
   const user = useAuth((s) => s.user);
   const sub = useAuth((s) => s.subscription);
@@ -19,32 +19,17 @@ export function PaywallBanner({ className }: { className?: string }) {
     : `https://t.me/${TG_BOT_USERNAME}?start=pay`;
 
   return (
-    <aside
-      aria-label="Подписка"
-      className={cn(
-        'relative overflow-hidden rounded-2xl border border-border bg-card p-5 sm:p-6',
-        'shadow-soft',
-        className,
-      )}
-    >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -right-12 -top-12 size-56 rounded-full opacity-25"
-        style={{
-          background:
-            'radial-gradient(closest-side, color-mix(in oklab, var(--accent) 85%, transparent), transparent 70%)',
-        }}
-      />
-      <div className="relative flex flex-wrap items-start gap-4">
+    <aside aria-label="Подписка" className={cn('glass-shell', className)}>
+      <div className="glass-inner p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
             Подписка
           </div>
-          <h3 className="mt-1 text-lg sm:text-xl font-semibold tracking-tight">
+          <h3 className="mt-1 text-[18px] leading-6 font-semibold tracking-tight">
             Безлимит за {SUB_PRICE_STARS} ⭐ / {SUB_PERIOD_DAYS} дней
           </h3>
-          <p className="mt-1.5 max-w-prose text-sm text-muted-foreground">
-            Оплата через Telegram Stars — без карт, без привязок, один тап в Telegram.
+          <p className="mt-1 max-w-prose text-[12px] leading-4 text-muted-foreground">
+            Оплата через Telegram Stars — без карт, в один тап.
             {!user && ' Чтобы подписка привязалась к аккаунту, сначала войди через Telegram.'}
           </p>
         </div>
@@ -53,12 +38,15 @@ export function PaywallBanner({ className }: { className?: string }) {
           target="_blank"
           rel="noopener noreferrer"
           className={cn(
-            'shrink-0 inline-flex h-11 items-center justify-center gap-2 rounded-md px-5 text-[15px] font-medium',
-            'bg-accent text-accent-foreground hover:bg-accent/90 transition-colors',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            'inline-flex items-center gap-2 h-9 px-4 rounded-[8px] text-[12px] font-medium shrink-0',
+            'bg-accent text-accent-foreground border border-[rgba(255,255,255,0.1)]',
+            'hover:bg-[color:color-mix(in_oklab,var(--accent)_88%,white_12%)]',
+            'transition-colors duration-150',
+            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
           )}
         >
-          Оформить <ExternalLink size={14} />
+          Оформить
+          <ExternalLink size={12} strokeWidth={1.5} />
         </a>
       </div>
     </aside>

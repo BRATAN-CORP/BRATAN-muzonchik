@@ -32,6 +32,9 @@ function formatTime(sec: number) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// Fullscreen player — strict dark surface, glass cover tile, WebGL
+// visualizer strip. No radial cover glow, no backdrop pulse. Escape
+// closes; subpanels take priority.
 export function FullPlayer() {
   const fullOpen = usePlayer((s) => s.fullOpen);
   const closeFull = usePlayer((s) => s.closeFull);
@@ -59,7 +62,6 @@ export function FullPlayer() {
   const toggleEq = usePlayer((s) => s.toggleEq);
   const toggleQueue = usePlayer((s) => s.toggleQueue);
 
-  // Escape closes the overlay; subpanels get priority via Sheet's own handler.
   useEffect(() => {
     if (!fullOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -74,29 +76,21 @@ export function FullPlayer() {
       {fullOpen && current && (
         <motion.div
           key="full"
-          initial={{ opacity: 0, y: 24 }}
+          initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 24 }}
-          transition={{ duration: 0.28, ease: [0.22, 0.61, 0.36, 1] }}
+          exit={{ opacity: 0, y: 16 }}
+          transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
           className="fixed inset-0 z-40 bg-background text-foreground"
           role="dialog"
           aria-modal="true"
           aria-label="Полноэкранный плеер"
         >
-          {/* Background glow layer (echo of cover) */}
-          <div className="absolute inset-0 -z-10 overflow-hidden">
-            <div className="absolute inset-0 opacity-60">
-              <CoverGlow src={current.thumb} title={current.title} artist={current.artist} pulse className="h-full w-full" />
-            </div>
-            <div className="absolute inset-0 bg-background/80 backdrop-blur-2xl" />
-          </div>
-
-          {/* Top bar */}
-          <div className="flex items-center justify-between gap-2 px-4 sm:px-8 pt-4 sm:pt-6">
+          {/* Top bar — minimal, matches app TopBar height */}
+          <div className="flex items-center justify-between gap-2 px-4 sm:px-8 h-12 border-b border-border">
             <Button variant="ghost" size="icon-sm" aria-label="Свернуть плеер" onClick={closeFull}>
-              <ChevronDown size={18} />
+              <ChevronDown size={16} strokeWidth={1.5} />
             </Button>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
               Сейчас играет
             </div>
             <div className="flex items-center gap-1">
@@ -108,7 +102,7 @@ export function FullPlayer() {
                 onClick={toggleEq}
                 className={eqOpen ? 'text-accent' : ''}
               >
-                <SlidersHorizontal size={16} />
+                <SlidersHorizontal size={14} strokeWidth={1.5} />
               </Button>
               <Button
                 variant="ghost"
@@ -118,26 +112,25 @@ export function FullPlayer() {
                 onClick={toggleQueue}
                 className={queueOpen ? 'text-accent' : ''}
               >
-                <ListMusic size={16} />
+                <ListMusic size={14} strokeWidth={1.5} />
               </Button>
             </div>
           </div>
 
           {/* Main content */}
-          <div className="mx-auto max-w-[820px] px-5 sm:px-8 pb-8 pt-2 sm:pt-4 flex flex-col items-center gap-6 h-[calc(100%-72px)] overflow-y-auto">
+          <div className="mx-auto max-w-[820px] px-5 sm:px-8 pb-8 pt-6 flex flex-col items-center gap-6 h-[calc(100%-48px)] overflow-y-auto">
             <CoverGlow
               src={current.thumb}
               title={current.title}
               artist={current.artist}
-              pulse={isPlaying}
               className="w-full"
             />
 
             <div className="w-full text-center">
-              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-balance">
+              <h1 className="text-[22px] sm:text-[28px] leading-tight font-semibold tracking-[-0.02em] text-balance">
                 {current.title}
               </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-[12px] text-muted-foreground">
                 {current.artistId ? (
                   <Link
                     to={`/artist/td/${encodeURIComponent(current.artistId)}`}
@@ -164,9 +157,11 @@ export function FullPlayer() {
               </p>
             </div>
 
-            {/* Visualizer */}
-            <div className="w-full h-20 sm:h-24 rounded-xl hairline overflow-hidden bg-card/60">
-              <SoundVisualizer active={isPlaying} />
+            {/* Visualizer — strict glass frame */}
+            <div className="w-full glass-shell">
+              <div className="glass-inner h-20 sm:h-24 overflow-hidden">
+                <SoundVisualizer active={isPlaying} />
+              </div>
             </div>
 
             {/* Progress */}
@@ -198,10 +193,10 @@ export function FullPlayer() {
                 aria-label={shuffle ? 'Выключить shuffle' : 'Включить shuffle'}
                 className={shuffle ? 'text-accent' : ''}
               >
-                <Shuffle size={16} />
+                <Shuffle size={14} strokeWidth={1.5} />
               </Button>
               <Button variant="ghost" size="icon-lg" aria-label="Предыдущий" onClick={prev}>
-                <SkipBack size={22} fill="currentColor" />
+                <SkipBack size={20} fill="currentColor" strokeWidth={1.5} />
               </Button>
               <Button
                 variant="default"
@@ -209,10 +204,14 @@ export function FullPlayer() {
                 aria-label={isPlaying ? 'Пауза' : 'Играть'}
                 onClick={() => setIsPlaying(!isPlaying)}
               >
-                {isPlaying ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" />}
+                {isPlaying ? (
+                  <Pause size={24} fill="currentColor" strokeWidth={1.5} />
+                ) : (
+                  <Play size={24} fill="currentColor" strokeWidth={1.5} />
+                )}
               </Button>
               <Button variant="ghost" size="icon-lg" aria-label="Следующий" onClick={next}>
-                <SkipForward size={22} fill="currentColor" />
+                <SkipForward size={20} fill="currentColor" strokeWidth={1.5} />
               </Button>
               <Button
                 variant="ghost"
@@ -222,7 +221,11 @@ export function FullPlayer() {
                 onClick={cycleRepeat}
                 className={repeat !== 'off' ? 'text-accent' : ''}
               >
-                {repeat === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />}
+                {repeat === 'one' ? (
+                  <Repeat1 size={14} strokeWidth={1.5} />
+                ) : (
+                  <Repeat size={14} strokeWidth={1.5} />
+                )}
               </Button>
             </div>
 
@@ -234,7 +237,11 @@ export function FullPlayer() {
                 aria-label={muted ? 'Включить звук' : 'Выключить звук'}
                 onClick={toggleMute}
               >
-                {muted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                {muted || volume === 0 ? (
+                  <VolumeX size={14} strokeWidth={1.5} />
+                ) : (
+                  <Volume2 size={14} strokeWidth={1.5} />
+                )}
               </Button>
               <Slider
                 value={muted ? 0 : volume}
@@ -251,7 +258,7 @@ export function FullPlayer() {
           <Sheet open={eqOpen} onOpenChange={setEqOpen} side="right" labelledBy="eq-title">
             <div className={cn('flex flex-col h-full')}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-                <h2 id="eq-title" className="text-base font-semibold tracking-tight">
+                <h2 id="eq-title" className="text-[14px] font-semibold tracking-tight">
                   Эквалайзер
                 </h2>
                 <Button
@@ -260,7 +267,7 @@ export function FullPlayer() {
                   aria-label="Закрыть эквалайзер"
                   onClick={() => setEqOpen(false)}
                 >
-                  <ChevronDown size={16} />
+                  <ChevronDown size={14} strokeWidth={1.5} />
                 </Button>
               </div>
               <div className="flex-1 overflow-y-auto p-5">
@@ -272,7 +279,7 @@ export function FullPlayer() {
           <Sheet open={queueOpen} onOpenChange={setQueueOpen} side="right" labelledBy="queue-title">
             <div className={cn('flex flex-col h-full')}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-                <h2 id="queue-title" className="text-base font-semibold tracking-tight">
+                <h2 id="queue-title" className="text-[14px] font-semibold tracking-tight">
                   Очередь
                 </h2>
                 <Button
@@ -281,7 +288,7 @@ export function FullPlayer() {
                   aria-label="Закрыть очередь"
                   onClick={() => setQueueOpen(false)}
                 >
-                  <ChevronDown size={16} />
+                  <ChevronDown size={14} strokeWidth={1.5} />
                 </Button>
               </div>
               <div className="flex-1 overflow-y-auto p-3">

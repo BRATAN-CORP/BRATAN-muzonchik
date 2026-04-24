@@ -5,8 +5,6 @@ import { PageHeader } from '@/components/PageHeader';
 import { EmptyState } from '@/components/EmptyState';
 import { Section } from '@/components/Section';
 import { PaywallBanner } from '@/components/PaywallBanner';
-import { TelegramLogin } from '@/components/TelegramLogin';
-import { Card, CardContent } from '@/components/ui/card';
 import { useAuth } from '@/store/auth';
 
 const LS_KEY = 'bratan.library.v1';
@@ -22,9 +20,8 @@ function readLibrary(): Track[] {
   }
 }
 
-// Library is a hybrid surface: local saved tracks (localStorage) +
-// Telegram auth + paywall. Keeping the TG login slot visible on this page
-// is deliberate — most users come here when they want playlist sync.
+// Library: local saved tracks + subscription status. Telegram login now
+// lives in the TopBar corner — we don't duplicate it here.
 export function LibraryPage() {
   const [tracks] = useState<Track[]>(() => readLibrary());
   const user = useAuth((s) => s.user);
@@ -35,44 +32,43 @@ export function LibraryPage() {
     if (user) void refreshSubscription();
   }, [user, refreshSubscription]);
 
-  // `Date.now()` is impure, so we derive once at render. Any re-render
-  // refreshes it — which is fine, this page re-renders rarely.
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
   const subActive = !!(sub && !sub.admin && sub.subscribed && sub.until * 1000 > nowMs);
   const subUntil = sub?.until ? new Date(sub.until * 1000) : null;
 
   return (
-    <div className="flex flex-col gap-10">
+    <div className="flex flex-col gap-8">
       <PageHeader
         eyebrow="Библиотека"
         title="Твоя музыка"
-        description="Сохранённые треки, аккаунт и подписка. Всё в одном месте."
+        description="Сохранённые треки и подписка."
       />
 
-      <Section title="Аккаунт">
-        <Card>
-          <CardContent className="flex flex-col gap-3">
-            <TelegramLogin />
-            {user && sub?.admin && (
-              <div className="text-[11px] text-accent">Админ-безлимит активен.</div>
+      {user && (sub?.admin || subActive) && (
+        <div className="glass-shell">
+          <div className="glass-inner p-4 flex items-center justify-between gap-3 text-[12px]">
+            <div className="flex items-center gap-2">
+              <span className="size-[6px] rounded-full bg-accent" aria-hidden />
+              <span className="text-foreground">
+                {sub?.admin ? 'Админ-безлимит активен' : 'Подписка активна'}
+              </span>
+            </div>
+            {!sub?.admin && subActive && subUntil && (
+              <span className="text-muted-foreground">
+                до {subUntil.toLocaleDateString('ru-RU')}
+              </span>
             )}
-            {user && subActive && subUntil && (
-              <div className="text-[11px] text-muted-foreground">
-                Подписка активна до{' '}
-                <span className="text-foreground">
-                  {subUntil.toLocaleDateString('ru-RU')}
-                </span>
-                .
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </Section>
+          </div>
+        </div>
+      )}
 
       <PaywallBanner />
 
-      <Section title="Сохранённые треки" subtitle="Здесь появятся треки, которые ты добавишь на странице поиска.">
+      <Section
+        title="Сохранённые треки"
+        subtitle="Здесь появятся треки, которые ты добавишь на странице поиска."
+      >
         {tracks.length === 0 ? (
           <EmptyState
             title="Пока пусто"

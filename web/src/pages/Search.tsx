@@ -5,6 +5,7 @@ import {
   searchTidalAlbums,
   searchTidalArtists,
   searchTidalTracks,
+  searchYouTubeTracks,
 } from '@/lib/api';
 import type { AlbumSet, ArtistSet, Track } from '@/lib/types';
 import { TrackList } from '@/components/TrackList';
@@ -14,18 +15,17 @@ import { PageHeader } from '@/components/PageHeader';
 import { EmptyState } from '@/components/EmptyState';
 import { SearchInput } from '@/components/SearchInput';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { encodeQuery } from '@/lib/safe-url';
 import { usePlayer } from '@/store/player';
+import { cn } from '@/lib/cn';
 
 type Tab = 'tracks' | 'albums' | 'artists';
-type Source = 'tidal' | 'soundcloud';
+type Source = 'tidal' | 'soundcloud' | 'youtube';
 
-// /search — controlled input + 3 result tabs. The source switch only
-// applies to the tracks tab (albums/artists come from Tidal). We never
-// execute a query until the route actually carries one, so an empty
-// /search page is a friendly empty state, not an API error.
+// /search — strict single-column grid. Source toggle applies only to
+// tracks (Tidal / SoundCloud / YouTube). Albums and artists come from
+// Tidal only because that's all the worker exposes for those shapes.
 export function SearchPage() {
   const { q: encoded } = useParams();
   const navigate = useNavigate();
@@ -39,8 +39,6 @@ export function SearchPage() {
   }, [encoded]);
 
   const [input, setInput] = useState(q);
-  // Sync the controlled input with the route param when it changes from
-  // navigation (e.g. browser back/forward).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setInput(q);
@@ -76,7 +74,12 @@ export function SearchPage() {
 
     if (tab === 'tracks') {
       setTracks(null);
-      const p = source === 'tidal' ? searchTidalTracks(q) : searchSoundCloudTracks(q);
+      const p =
+        source === 'tidal'
+          ? searchTidalTracks(q)
+          : source === 'soundcloud'
+            ? searchSoundCloudTracks(q)
+            : searchYouTubeTracks(q);
       p.then((items) => !cancelled && setTracks(items)).catch(fail);
     } else if (tab === 'albums') {
       setAlbums(null);
@@ -100,14 +103,14 @@ export function SearchPage() {
   };
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow="Поиск"
         title="Найти что послушать"
-        description="Tidal и SoundCloud в одном интерфейсе. Введи трек, альбом или артиста."
+        description="Tidal, SoundCloud и YouTube — в одном интерфейсе."
       />
 
-      <form onSubmit={submit} className="flex gap-3 items-center" role="search">
+      <form onSubmit={submit} className="flex gap-2 items-center" role="search">
         <SearchInput
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -119,9 +122,20 @@ export function SearchPage() {
           autoFocus
           aria-label="Поисковый запрос"
         />
-        <Button type="submit" variant="default" size="lg" disabled={!input.trim()}>
+        <button
+          type="submit"
+          disabled={!input.trim()}
+          className={cn(
+            'h-10 px-4 rounded-[8px] text-[12px] font-medium shrink-0',
+            'bg-accent text-accent-foreground border border-[rgba(255,255,255,0.1)]',
+            'hover:bg-[color:color-mix(in_oklab,var(--accent)_88%,white_12%)]',
+            'disabled:opacity-50 disabled:pointer-events-none',
+            'transition-colors duration-150',
+            'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+          )}
+        >
           Найти
-        </Button>
+        </button>
       </form>
 
       {!q ? (
@@ -130,7 +144,7 @@ export function SearchPage() {
           description="Введи название трека, альбома или имя артиста — увидишь живые результаты."
         />
       ) : (
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex flex-col gap-5">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <TabsList>
               <TabsTrigger value="tracks">Треки</TabsTrigger>
@@ -138,16 +152,17 @@ export function SearchPage() {
               <TabsTrigger value="artists">Артисты</TabsTrigger>
             </TabsList>
             {tab === 'tracks' && (
-              <div className="flex items-center gap-1.5 rounded-full border border-border p-1">
-                <SourcePill
-                  active={source === 'tidal'}
-                  onClick={() => setSource('tidal')}
-                  label="Tidal"
-                />
+              <div className="flex items-center gap-1 rounded-[8px] border border-[rgba(255,255,255,0.1)] p-1">
+                <SourcePill active={source === 'tidal'} onClick={() => setSource('tidal')} label="Tidal" />
                 <SourcePill
                   active={source === 'soundcloud'}
                   onClick={() => setSource('soundcloud')}
                   label="SoundCloud"
+                />
+                <SourcePill
+                  active={source === 'youtube'}
+                  onClick={() => setSource('youtube')}
+                  label="YouTube"
                 />
               </div>
             )}
@@ -217,12 +232,12 @@ function SourcePill({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={
-        'h-7 px-3 rounded-full text-[12px] font-medium transition-colors ' +
-        (active
-          ? 'bg-foreground text-background'
-          : 'text-muted-foreground hover:text-foreground')
-      }
+      className={cn(
+        'h-6 px-2.5 rounded-[6px] text-[11px] font-medium transition-colors duration-150',
+        active
+          ? 'bg-[rgba(60,130,255,0.14)] text-foreground'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
     >
       {label}
     </button>

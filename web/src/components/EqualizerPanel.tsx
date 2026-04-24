@@ -1,7 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Slider } from './ui/slider';
-import { Button } from './ui/button';
-import { Separator } from './ui/separator';
 import {
   EQ_PRESET_NAMES,
   gainsForPreset,
@@ -24,7 +21,9 @@ import { cn } from '@/lib/cn';
 
 // Visible 10-band EQ. The Web Audio wiring lives in lib/audio-graph.ts —
 // here we only read/write gains and keep sliders in sync. Moving a
-// slider immediately switches the active preset to "Custom".
+// slider immediately switches the active preset to "Custom". Native
+// vertical range inputs give us a native-feel thumb with proper dB
+// position, with a fixed gridline rail for scale reference.
 export function EqualizerPanel({ className }: { className?: string }) {
   const [preset, setPreset] = useState<EqPresetName>(() => readSelectedPreset());
   const [enabled, setEnabledState] = useState<boolean>(() => readEqEnabled());
@@ -33,8 +32,7 @@ export function EqualizerPanel({ className }: { className?: string }) {
     return p === 'Custom' ? readCustomPreset() : gainsForPreset(p);
   });
 
-  // Apply on mount in case the user hasn't touched audio yet — no-op when
-  // the graph isn't built; we'll reapply once it is.
+  // Apply on mount — no-op if the graph isn't built yet; reapplied later.
   useEffect(() => {
     setAllGains(gains);
     applyEqEnabled(enabled);
@@ -58,10 +56,11 @@ export function EqualizerPanel({ className }: { className?: string }) {
   };
 
   const onSlide = (i: number, value: number) => {
+    const clamped = Math.max(-12, Math.min(12, value));
     const next = gains.slice() as EqGains;
-    next[i] = value;
+    next[i] = clamped;
     setGains(next);
-    setBandGain(i, value);
+    setBandGain(i, clamped);
     if (preset !== 'Custom') {
       setPreset('Custom');
       writeSelectedPreset('Custom');
@@ -76,10 +75,12 @@ export function EqualizerPanel({ className }: { className?: string }) {
     applyEqEnabled(next);
   };
 
+  const dbMarks = [12, 6, 0, -6, -12];
+
   return (
     <div className={cn('flex flex-col gap-4', className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
           {EQ_PRESET_NAMES.map((name) => (
             <button
               key={name}
@@ -87,73 +88,88 @@ export function EqualizerPanel({ className }: { className?: string }) {
               onClick={() => (name === 'Custom' ? chooseCustom() : chooseBuiltIn(name))}
               aria-pressed={preset === name}
               className={cn(
-                'h-8 px-3 rounded-full text-[12px] font-medium border transition-colors',
+                'h-7 px-2.5 rounded-[8px] text-[11px] font-medium border transition-colors duration-150',
                 preset === name
-                  ? 'bg-foreground text-background border-foreground'
-                  : 'bg-transparent border-border text-muted-foreground hover:text-foreground hover:bg-secondary',
+                  ? 'bg-accent text-accent-foreground border-[rgba(255,255,255,0.1)]'
+                  : 'bg-transparent border-[rgba(255,255,255,0.1)] text-muted-foreground hover:text-foreground hover:border-[rgba(255,255,255,0.22)]',
               )}
             >
               {name}
             </button>
           ))}
         </div>
-        <Button variant={enabled ? 'secondary' : 'outline'} size="sm" onClick={toggleEnabled}>
-          {enabled ? 'EQ включён' : 'EQ выключен'}
-        </Button>
+        <button
+          type="button"
+          onClick={toggleEnabled}
+          className={cn(
+            'h-7 px-3 rounded-[8px] text-[11px] font-medium border transition-colors duration-150',
+            enabled
+              ? 'bg-[rgba(60,130,255,0.12)] border-[rgba(60,130,255,0.3)] text-foreground'
+              : 'bg-transparent border-[rgba(255,255,255,0.1)] text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {enabled ? 'EQ on' : 'EQ off'}
+        </button>
       </div>
 
-      <Separator />
+      {/* Grid with dB scale on the left and 10 bands on the right */}
+      <div className="flex gap-3">
+        <div className="flex flex-col justify-between py-2 text-[10px] tabular-nums text-muted-foreground h-48 shrink-0">
+          {dbMarks.map((m) => (
+            <div key={m} className="w-8 text-right leading-none">
+              {m > 0 ? `+${m}` : m}{m === dbMarks[0] ? ' dB' : ''}
+            </div>
+          ))}
+        </div>
 
-      <div className="grid grid-cols-10 gap-2 sm:gap-3">
-        {EQ_FREQS.map((freq, i) => (
-          <div key={freq} className="flex flex-col items-center gap-2">
-            <div className="h-40 sm:h-52 flex items-center">
-              <VerticalSlider
-                value={gains[i] ?? 0}
-                onChange={(v) => onSlide(i, v)}
-                disabled={!enabled}
-              />
-            </div>
-            <div className="text-[10px] text-muted-foreground tabular-nums">
-              {freq >= 1000 ? `${freq / 1000}k` : freq}
-            </div>
-            <div className="text-[10px] text-foreground tabular-nums">
-              {gains[i] > 0 ? `+${gains[i].toFixed(0)}` : gains[i].toFixed(0)}
-            </div>
+        <div className="relative flex-1 h-48">
+          {/* Zero-line indicator */}
+          <div
+            className="absolute left-0 right-0 top-1/2 -translate-y-1/2 border-t border-dashed border-[rgba(255,255,255,0.08)]"
+            aria-hidden
+          />
+          <div className="relative z-10 grid grid-cols-10 gap-1 sm:gap-2 h-full">
+            {EQ_FREQS.map((freq, i) => (
+              <div key={freq} className="flex flex-col items-center gap-1.5">
+                <div className="flex-1 flex items-center justify-center w-full">
+                  <input
+                    type="range"
+                    className="eq-slider"
+                    min={-12}
+                    max={12}
+                    step={1}
+                    value={gains[i] ?? 0}
+                    onChange={(e) => onSlide(i, Number(e.target.value))}
+                    disabled={!enabled}
+                    aria-label={`Полоса ${freq} Гц, усиление ${gains[i] ?? 0} dB`}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
-    </div>
-  );
-}
 
-// Horizontal Slider rotated 90° — gives a vertical dB slider without
-// a separate primitive.
-function VerticalSlider({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: number;
-  onChange: (v: number) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="h-full w-5 flex items-center justify-center">
-      <div className="h-full w-40 sm:w-52 -rotate-90 origin-center">
-        <Slider
-          value={value}
-          min={-12}
-          max={12}
-          step={1}
-          onChange={onChange}
-          disabled={disabled}
-          aria-label={`Усиление полосы, ${value > 0 ? '+' : ''}${value} dB`}
-          aria-valuetext={`${value > 0 ? '+' : ''}${value} dB`}
-          trackClassName="h-1.5"
-          rangeClassName="bg-accent"
-          thumbClassName="size-3.5 bg-foreground"
-        />
+      {/* Frequency labels */}
+      <div className="flex gap-3">
+        <div className="w-8 shrink-0" aria-hidden />
+        <div className="flex-1 grid grid-cols-10 gap-1 sm:gap-2">
+          {EQ_FREQS.map((freq, i) => (
+            <div key={freq} className="flex flex-col items-center gap-0.5">
+              <div className="text-[10px] leading-3 text-muted-foreground tabular-nums">
+                {freq >= 1000 ? `${freq / 1000}k` : freq}
+              </div>
+              <div
+                className={cn(
+                  'text-[10px] leading-3 tabular-nums',
+                  (gains[i] ?? 0) === 0 ? 'text-muted-foreground' : 'text-accent',
+                )}
+              >
+                {(gains[i] ?? 0) > 0 ? `+${gains[i]}` : gains[i]}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

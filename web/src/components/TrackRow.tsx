@@ -1,7 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Pause, Play } from 'lucide-react';
 import { Cover } from './Cover';
-import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { usePlayer } from '@/store/player';
 import type { Track } from '@/lib/types';
@@ -66,8 +65,8 @@ export function TrackRow({
       style={{
         gridTemplateColumns:
           typeof index === 'number'
-            ? 'minmax(1.5rem,auto) auto minmax(0,1fr) auto auto'
-            : 'auto minmax(0,1fr) auto auto',
+            ? 'minmax(1.5rem,auto) auto minmax(0,1fr) auto'
+            : 'auto minmax(0,1fr) auto',
       }}
       onDoubleClick={toggle}
     >
@@ -146,25 +145,16 @@ export function TrackRow({
         </div>
       </div>
 
-      <div className="hidden md:flex items-center gap-2">
+      <div className="flex items-center gap-2">
         {track.audioQuality && /LOSSLESS|HI_RES/i.test(track.audioQuality) && (
-          <Badge variant="outline">
+          <Badge variant="outline" className="hidden md:inline-flex">
             {/HI_RES/.test(track.audioQuality) ? 'Hi-Res' : 'Lossless'}
           </Badge>
         )}
-        <span className="text-xs text-muted-foreground tabular-nums tabular-nums w-10 text-right">
+        <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
           {track.duration ? fmt(track.duration) : ''}
         </span>
       </div>
-
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        onClick={toggle}
-        aria-label={active ? `Пауза: ${track.title}` : `Играть ${track.title}`}
-      >
-        {active ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
-      </Button>
     </div>
   );
 }
