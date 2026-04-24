@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import type { Track } from '@/lib/types';
 
+// Repeat model: 'off' → no loop; 'all' → loop whole queue; 'one' → loop current track.
+export type RepeatMode = 'off' | 'all' | 'one';
+
 interface PlayerState {
   queue: Track[];
   index: number;
@@ -9,34 +12,57 @@ interface PlayerState {
   duration: number;
   position: number;
   volume: number;
+  muted: boolean;
   shuffle: boolean;
-  loop: boolean;
-  eqOpen: boolean;
+  repeat: RepeatMode;
+  // UI surface state
   fullOpen: boolean;
+  eqOpen: boolean;
+  queueOpen: boolean;
 
   setQueue: (queue: Track[], startIndex?: number) => void;
   playTrack: (track: Track, queue?: Track[]) => void;
   setIsPlaying: (playing: boolean) => void;
   setTime: (position: number, duration: number) => void;
+  seekTo: (seconds: number) => void;
   setVolume: (volume: number) => void;
+  toggleMute: () => void;
   next: () => void;
   prev: () => void;
   toggleShuffle: () => void;
-  toggleLoop: () => void;
+  cycleRepeat: () => void;
+
   openFull: () => void;
   closeFull: () => void;
   toggleEq: () => void;
+  setEqOpen: (open: boolean) => void;
+  toggleQueue: () => void;
+  setQueueOpen: (open: boolean) => void;
+}
+
+// Side-effect used by the AudioHost to imperatively seek the underlying
+// <audio> element without tying the store to DOM refs.
+let pendingSeek: number | null = null;
+export function takePendingSeek(): number | null {
+  const s = pendingSeek;
+  pendingSeek = null;
+  return s;
 }
 
 const LS_VOLUME = 'bratan.volume';
+const LS_MUTED = 'bratan.muted';
 const LS_SHUFFLE = 'bratan.shuffle';
-const LS_LOOP = 'bratan.loop';
+const LS_REPEAT = 'bratan.repeat';
 
 const readInt = (key: string, fallback: number) => {
   const v = Number(localStorage.getItem(key));
   return Number.isFinite(v) ? v : fallback;
 };
 const readBool = (key: string) => localStorage.getItem(key) === '1';
+const readRepeat = (): RepeatMode => {
+  const v = localStorage.getItem(LS_REPEAT);
+  return v === 'all' || v === 'one' ? v : 'off';
+};
 
 export const usePlayer = create<PlayerState>((set, get) => ({
   queue: [],
@@ -46,10 +72,12 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   duration: 0,
   position: 0,
   volume: readInt(LS_VOLUME, 80),
+  muted: readBool(LS_MUTED),
   shuffle: readBool(LS_SHUFFLE),
-  loop: readBool(LS_LOOP),
-  eqOpen: false,
+  repeat: readRepeat(),
   fullOpen: false,
+  eqOpen: false,
+  queueOpen: false,
 
   setQueue: (queue, startIndex = 0) =>
     set({ queue, index: Math.max(0, Math.min(startIndex, queue.length - 1)) }),
@@ -68,19 +96,39 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   setTime: (position, duration) => set({ position, duration }),
 
+  seekTo: (seconds) => {
+    pendingSeek = Math.max(0, seconds);
+    const { duration } = get();
+    set({ position: Math.min(Math.max(0, seconds), duration || seconds) });
+  },
+
   setVolume: (volume) => {
     const clamped = Math.max(0, Math.min(100, Math.round(volume)));
     localStorage.setItem(LS_VOLUME, String(clamped));
-    set({ volume: clamped });
+    set({ volume: clamped, muted: clamped === 0 ? get().muted : false });
   },
 
+  toggleMute: () =>
+    set((s) => {
+      const next = !s.muted;
+      localStorage.setItem(LS_MUTED, next ? '1' : '0');
+      return { muted: next };
+    }),
+
   next: () => {
-    const { queue, index, shuffle, loop } = get();
+    const { queue, index, shuffle, repeat } = get();
     if (!queue.length) return;
     let nextIdx: number;
-    if (shuffle) nextIdx = Math.floor(Math.random() * queue.length);
-    else if (index + 1 < queue.length) nextIdx = index + 1;
-    else nextIdx = loop ? 0 : queue.length - 1;
+    if (repeat === 'one') nextIdx = index;
+    else if (shuffle) {
+      if (queue.length === 1) nextIdx = 0;
+      else {
+        let r = index;
+        while (r === index) r = Math.floor(Math.random() * queue.length);
+        nextIdx = r;
+      }
+    } else if (index + 1 < queue.length) nextIdx = index + 1;
+    else nextIdx = repeat === 'all' ? 0 : queue.length - 1;
     set({ index: nextIdx, current: queue[nextIdx] });
   },
 
@@ -98,14 +146,18 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       return { shuffle: v };
     }),
 
-  toggleLoop: () =>
+  cycleRepeat: () =>
     set((s) => {
-      const v = !s.loop;
-      localStorage.setItem(LS_LOOP, v ? '1' : '0');
-      return { loop: v };
+      const order: RepeatMode[] = ['off', 'all', 'one'];
+      const next = order[(order.indexOf(s.repeat) + 1) % order.length];
+      localStorage.setItem(LS_REPEAT, next);
+      return { repeat: next };
     }),
 
   openFull: () => set({ fullOpen: true }),
-  closeFull: () => set({ fullOpen: false }),
-  toggleEq: () => set((s) => ({ eqOpen: !s.eqOpen })),
+  closeFull: () => set({ fullOpen: false, eqOpen: false, queueOpen: false }),
+  toggleEq: () => set((s) => ({ eqOpen: !s.eqOpen, queueOpen: s.eqOpen ? s.queueOpen : false })),
+  setEqOpen: (open) => set({ eqOpen: open }),
+  toggleQueue: () => set((s) => ({ queueOpen: !s.queueOpen, eqOpen: s.queueOpen ? s.eqOpen : false })),
+  setQueueOpen: (open) => set({ queueOpen: open }),
 }));

@@ -1,86 +1,153 @@
 @import "tailwindcss";
+@import "@fontsource-variable/manrope";
 
 /* ---------------------------------------------------------------------------
- * БРАТАН-музончик design tokens.
+ * BRATAN-muzonchik design tokens.
  *
- * The palette is intentionally monochrome ("graphite") with a single accent.
- * No multi-color gradients — accents are expressed with density, weight and
- * a reserved use of `--accent` (violet in dark, same violet slightly deeper
- * in light so it still reads as the single identity color across themes).
+ * Token names follow the shadcn/ui convention so primitives stay drop-in
+ * compatible. The palette is intentionally monochrome ("graphite") with a
+ * single violet accent that reads as the same brand color across themes.
  *
- * Graphite scale mirrors Tailwind's neutral scale but with a touch of blue
- * at the dark end so the UI reads more "premium" than "default black".
- * ---------------------------------------------------------------------------*/
+ * All semantic pairs ship a `-foreground` counterpart so components never
+ * have to guess contrast manually. Light theme is triggered by the
+ * `data-theme="light"` attribute on <html>; the early script in index.html
+ * sets it before first paint to avoid a FOUC.
+ * -------------------------------------------------------------------------*/
+
+:root {
+  color-scheme: dark;
+
+  --background: #0a0a0b;
+  --foreground: #f5f5f7;
+
+  --card: #111114;
+  --card-foreground: #f5f5f7;
+
+  --popover: #141418;
+  --popover-foreground: #f5f5f7;
+
+  --primary: #f5f5f7;
+  --primary-foreground: #0a0a0b;
+
+  --secondary: #1b1b20;
+  --secondary-foreground: #f5f5f7;
+
+  --muted: #17171b;
+  --muted-foreground: #a1a1aa;
+
+  --accent: #7c5cff;
+  --accent-foreground: #ffffff;
+  --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
+
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+
+  --border: #26262c;
+  --border-strong: #3a3a42;
+  --input: #1c1c21;
+  --ring: #7c5cff;
+
+  --sidebar: #0d0d10;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-border: #1c1c21;
+
+  --player: #0d0d10;
+  --player-foreground: #f5f5f7;
+
+  --radius: 12px;
+
+  --shadow-soft: 0 1px 0 0 rgb(0 0 0 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  --shadow-float: 0 12px 32px -12px rgb(0 0 0 / 0.45), 0 4px 12px -4px rgb(0 0 0 / 0.3);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --background: #ffffff;
+  --foreground: #0a0a0b;
+
+  --card: #ffffff;
+  --card-foreground: #0a0a0b;
+
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0b;
+
+  --primary: #0a0a0b;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f3f3f5;
+  --secondary-foreground: #0a0a0b;
+
+  --muted: #f5f5f7;
+  --muted-foreground: #52525b;
+
+  --accent: #6b45ff;
+  --accent-foreground: #ffffff;
+  --accent-soft: color-mix(in oklab, var(--accent) 12%, transparent);
+
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  --border: #e6e6e9;
+  --border-strong: #d1d1d6;
+  --input: #f3f3f5;
+  --ring: #6b45ff;
+
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0b;
+  --sidebar-border: #ececef;
+
+  --player: #ffffff;
+  --player-foreground: #0a0a0b;
+}
+
+/* Tailwind 4 @theme — expose CSS variables as utility classes.
+ * Gives bg-background, text-foreground, border-border, ring-ring, etc.
+ * Same class names shadcn/ui components ship with. */
 @theme {
-  --color-graphite-50:  #fafafa;
-  --color-graphite-100: #f4f4f5;
-  --color-graphite-200: #e4e4e7;
-  --color-graphite-300: #d4d4d8;
-  --color-graphite-400: #a1a1aa;
-  --color-graphite-500: #71717a;
-  --color-graphite-600: #52525b;
-  --color-graphite-700: #3f3f46;
-  --color-graphite-800: #27272a;
-  --color-graphite-900: #18181b;
-  --color-graphite-950: #0b0b0c;
-
-  --color-accent-400: #a193ff;
-  --color-accent-500: #7c5cff;
-  --color-accent-600: #6b45ff;
-
-  --color-bg-base:     var(--bg);
-  --color-bg-elevated: var(--bg-el);
-  --color-bg-overlay:  var(--bg-ov);
-  --color-fg-base:     var(--fg);
-  --color-fg-muted:    var(--fg-muted);
-  --color-fg-subtle:   var(--fg-subtle);
-  --color-border-base: var(--border);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
   --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-player: var(--player);
+  --color-player-foreground: var(--player-foreground);
 
-  --radius-xs: 4px;
-  --radius-sm: 6px;
+  --radius-sm: 8px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
   --radius-2xl: 28px;
 
-  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Manrope Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", Menlo, monospace;
 
-  --shadow-soft: 0 1px 0 0 rgb(0 0 0 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.06);
-  --shadow-float: 0 12px 32px -12px rgb(0 0 0 / 0.35), 0 4px 12px -4px rgb(0 0 0 / 0.25);
-}
-
-/* Dark (default) */
-:root {
-  color-scheme: dark;
-  --bg:         #0b0b0c;
-  --bg-el:      #131316;
-  --bg-ov:      #1b1b20;
-  --fg:         #f4f4f5;
-  --fg-muted:   #a1a1aa;
-  --fg-subtle:  #71717a;
-  --border:     #27272a;
-  --border-strong: #3f3f46;
-
-  --accent: #7c5cff;
-  --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
-}
-
-/* Light */
-[data-theme="light"] {
-  color-scheme: light;
-  --bg:         #fafafa;
-  --bg-el:      #ffffff;
-  --bg-ov:      #f4f4f5;
-  --fg:         #18181b;
-  --fg-muted:   #52525b;
-  --fg-subtle:  #71717a;
-  --border:     #e4e4e7;
-  --border-strong: #d4d4d8;
-
-  --accent: #6b45ff;
-  --accent-soft: color-mix(in oklab, var(--accent) 12%, transparent);
+  /* Legacy compatibility aliases — old component classes still resolve. */
+  --color-bg-base: var(--background);
+  --color-bg-elevated: var(--card);
+  --color-bg-overlay: var(--muted);
+  --color-fg-base: var(--foreground);
+  --color-fg-muted: var(--muted-foreground);
+  --color-fg-subtle: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+  --color-border-base: var(--border);
 }
 
 html, body, #root {
@@ -88,51 +155,92 @@ html, body, #root {
   min-height: 100svh;
 }
 
-body {
-  font-family: var(--font-display);
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-  letter-spacing: -0.01em;
-  overscroll-behavior-y: none;
+html {
+  background: var(--background);
+  color: var(--foreground);
 }
 
-/* Scrollbar — slimmed and monochrome so it never competes with the content */
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  letter-spacing: -0.01em;
+  overscroll-behavior-y: none;
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 40%, transparent);
+  color: var(--foreground);
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in oklab, var(--fg) 16%, transparent);
+  background: color-mix(in oklab, var(--foreground) 16%, transparent);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklab, var(--fg) 28%, transparent);
+  background: color-mix(in oklab, var(--foreground) 28%, transparent);
   background-clip: padding-box;
   border: 2px solid transparent;
 }
 
-/* Buttons/selection reset so no browser default colors sneak in */
-button { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+:focus { outline: none; }
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
   border-radius: 6px;
 }
 
-/* Utility: hairline border that auto-uses the theme token. */
-@utility hairline {
-  border: 1px solid var(--border);
-}
-@utility hairline-strong {
-  border: 1px solid var(--border-strong);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-/* The brand logotype — monochrome, with the accent kept as a single dot. */
+@utility hairline { border: 1px solid var(--border); }
+@utility hairline-strong { border: 1px solid var(--border-strong); }
+@utility glass {
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+@utility text-balance { text-wrap: balance; }
+
 .brand-dot {
   display: inline-block;
-  width: 0.35em;
-  height: 0.35em;
+  width: 0.42em;
+  height: 0.42em;
   border-radius: 999px;
   background: var(--accent);
-  transform: translateY(-0.05em);
-  margin-left: 0.2em;
+  transform: translateY(-0.06em);
+  margin-left: 0.22em;
+  box-shadow: 0 0 16px color-mix(in oklab, var(--accent) 80%, transparent);
+}
+
+@keyframes eq-bar {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes soft-spin {
+  to { transform: rotate(360deg); }
+}
+.soft-spin { animation: soft-spin 0.8s linear infinite; }
+
+/* Background glow behind the fullscreen cover — a slow, reduced-intensity
+ * pulse so the card feels alive without clashing with the visualizer. */
+@keyframes coverglow {
+  0%, 100% { transform: scale(1) translateZ(0); opacity: 0.6; }
+  50% { transform: scale(1.06) translateZ(0); opacity: 0.78; }
 }

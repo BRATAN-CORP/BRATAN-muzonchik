@@ -3,8 +3,14 @@ import { useParams } from 'react-router-dom';
 import { fetchTidalArtist } from '@/lib/api';
 import type { AlbumSet, ArtistSet, Track } from '@/lib/types';
 import { Cover } from '@/components/Cover';
-import { TrackRow } from '@/components/TrackRow';
-import { CardTile } from '@/components/CardTile';
+import { TrackList } from '@/components/TrackList';
+import { AlbumCard } from '@/components/AlbumCard';
+import { Section } from '@/components/Section';
+import { EmptyState } from '@/components/EmptyState';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { Play, Shuffle } from 'lucide-react';
+import { usePlayer } from '@/store/player';
 
 export function ArtistPage() {
   const { id } = useParams();
@@ -13,83 +19,114 @@ export function ArtistPage() {
   const [albums, setAlbums] = useState<AlbumSet[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const playTrack = usePlayer((s) => s.playTrack);
+  const setIsPlaying = usePlayer((s) => s.setIsPlaying);
+  const shuffle = usePlayer((s) => s.shuffle);
+  const toggleShuffle = usePlayer((s) => s.toggleShuffle);
+
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!id) return;
+    // Clearing on id change is the standard "reset + fetch" pattern —
+    // the key-based reset alternative doesn't apply to a routed
+    // component whose id is the URL param itself.
+    setArtist(null);
+    setTopTracks(null);
+    setAlbums(null);
     setError(null);
     let cancelled = false;
     fetchTidalArtist(id)
-      .then(({ artist, topTracks, albums }) => {
+      .then((data) => {
         if (cancelled) return;
-        setArtist(artist);
-        setTopTracks(topTracks);
-        setAlbums(albums);
+        setArtist(data.artist);
+        setTopTracks(data.topTracks);
+        setAlbums(data.albums);
       })
-      .catch((err) => !cancelled && setError(err.message || 'не удалось загрузить'));
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Не удалось загрузить');
+      });
     return () => {
       cancelled = true;
     };
   }, [id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  if (error)
-    return <div className="p-10 text-sm text-fg-muted">Ошибка: {error}</div>;
+  if (error) {
+    return <EmptyState title="Ошибка" description={error} />;
+  }
+
+  const playAll = () => {
+    if (!topTracks?.length) return;
+    playTrack(topTracks[0], topTracks);
+    setIsPlaying(true);
+  };
 
   return (
-    <div className="px-5 md:px-10 pt-8 pb-24 max-w-[1200px] mx-auto">
+    <div className="flex flex-col gap-10">
       <header className="flex flex-col md:flex-row gap-6 items-start md:items-end">
-        <Cover
-          src={artist?.thumb}
-          title={artist?.name}
-          rounded="full"
-          className="size-40 md:size-48 shadow-float shrink-0"
-        />
-        <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-fg-subtle">Артист</div>
-          <h1 className="mt-1 text-3xl md:text-4xl font-semibold tracking-tight truncate">
-            {artist?.name ?? '—'}
+        {artist ? (
+          <Cover
+            src={artist.thumb}
+            title={artist.name}
+            rounded="full"
+            className="size-36 md:size-44 shrink-0 shadow-float"
+          />
+        ) : (
+          <Skeleton className="size-36 md:size-44 rounded-full" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Артист</div>
+          <h1 className="mt-1 text-3xl md:text-5xl font-semibold tracking-tight truncate">
+            {artist?.name ?? <Skeleton className="h-9 w-60 inline-block align-middle" />}
           </h1>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button variant="default" size="lg" onClick={playAll} disabled={!topTracks?.length}>
+              <Play size={16} fill="currentColor" /> Слушать
+            </Button>
+            <Button
+              variant="outline"
+              size="lg"
+              onClick={toggleShuffle}
+              aria-pressed={shuffle}
+              className={shuffle ? 'text-accent' : ''}
+            >
+              <Shuffle size={16} /> Перемешать
+            </Button>
+          </div>
         </div>
       </header>
 
-      <section className="mt-10">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-muted">Популярные треки</h2>
-        <div className="mt-3 flex flex-col gap-0.5">
-          {topTracks === null ? (
-            <div className="h-40 rounded-md bg-bg-overlay animate-pulse" />
-          ) : topTracks.length === 0 ? (
-            <div className="text-sm text-fg-muted">Нет треков.</div>
-          ) : (
-            topTracks.slice(0, 10).map((t, i) => (
-              <TrackRow key={`${t.source}-${t.id}`} track={t} index={i} queue={topTracks} />
-            ))
-          )}
-        </div>
-      </section>
+      <Section title="Популярные треки">
+        <TrackList
+          tracks={topTracks ?? []}
+          loading={topTracks === null}
+          numbered
+          emptyTitle="Нет треков"
+          emptyDescription="Tidal не вернул популярные треки."
+        />
+      </Section>
 
-      <section className="mt-10">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-fg-muted">Альбомы</h2>
-        <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-          {albums === null ? (
-            Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="p-3">
-                <div className="aspect-square rounded-md bg-bg-overlay animate-pulse" />
-                <div className="mt-3 h-3 w-3/4 bg-bg-overlay rounded animate-pulse" />
+      <Section title="Альбомы">
+        {albums === null ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex flex-col gap-3">
+                <Skeleton className="aspect-square rounded-xl" />
+                <Skeleton className="h-3 w-3/4" />
               </div>
-            ))
-          ) : albums.length === 0 ? (
-            <div className="text-sm text-fg-muted col-span-full">Альбомов нет.</div>
-          ) : (
-            albums.map((a) => (
-              <CardTile
-                key={a.id}
-                to={`/album/td/${encodeURIComponent(a.id)}`}
-                title={a.title}
-                subtitle={a.artist}
-                thumb={a.thumb}
-              />
-            ))
-          )}
-        </div>
-      </section>
+            ))}
+          </div>
+        ) : albums.length === 0 ? (
+          <EmptyState title="Альбомов нет" />
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {albums.map((a) => (
+              <AlbumCard key={a.id} album={a} />
+            ))}
+          </div>
+        )}
+      </Section>
     </div>
   );
 }

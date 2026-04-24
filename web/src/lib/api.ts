@@ -1,7 +1,10 @@
-// Thin client over the existing Cloudflare Worker API. All endpoints already
-// exist and have not been changed — only the frontend was rewritten.
+// Thin client over the Cloudflare Worker. All requests go through the
+// worker so secrets stay server-side — the frontend never touches a Tidal
+// or SoundCloud key. Each provider gets an adapter that normalizes the
+// response into our domain models from `./types`.
 
 import type { AlbumSet, ArtistSet, Track } from './types';
+import { safeHttpUrl } from './safe-url';
 
 export const API_BASE = 'https://bratan-muzonchik.bratan-muzonchik.workers.dev';
 
@@ -26,86 +29,133 @@ async function json<T>(url: string, timeoutMs = 15000): Promise<T> {
   }
 }
 
-// -------------------------------------------------------------------- Tidal
+// ----- Tidal --------------------------------------------------------------
 
-interface TidalSearchRaw {
-  items?: Array<{
-    id: string | number;
-    title?: string;
-    artist?: string;
-    artists?: string[];
-    artistId?: string | number;
-    albumId?: string | number;
-    album?: string;
-    cover?: string;
-    duration?: number | null;
-    audioQuality?: string | null;
-    explicit?: boolean;
-  }>;
+interface TidalTrackRaw {
+  id: string | number;
+  title?: string;
+  artist?: string;
+  artists?: Array<string | { name?: string; id?: string | number }>;
+  artistId?: string | number;
+  albumId?: string | number;
+  album?: string | { title?: string; id?: string | number; cover?: string };
+  cover?: string;
+  duration?: number | null;
+  audioQuality?: string | null;
+  explicit?: boolean;
 }
 
-export async function searchTidalTracks(q: string): Promise<Track[]> {
-  const data = await json<TidalSearchRaw>(
-    `${API_BASE}/tidal/search?q=${encodeURIComponent(q)}&limit=30`
+interface TidalAlbumRaw {
+  id: string | number;
+  title?: string;
+  artist?: string;
+  artists?: Array<string | { name?: string }>;
+  cover?: string;
+  numberOfTracks?: number;
+  releaseDate?: string;
+  type?: string;
+}
+
+interface TidalArtistRaw {
+  id: string | number;
+  name?: string;
+  picture?: string;
+}
+
+function firstArtistName(raw: TidalTrackRaw | TidalAlbumRaw): string {
+  if ('artist' in raw && typeof raw.artist === 'string' && raw.artist.trim()) return raw.artist.trim();
+  if (raw.artists && raw.artists.length > 0) {
+    const first = raw.artists[0];
+    if (typeof first === 'string') return first.trim();
+    if (first && typeof first === 'object' && typeof first.name === 'string') return first.name.trim();
+  }
+  return '';
+}
+
+function albumTitleOf(raw: TidalTrackRaw): string | undefined {
+  if (typeof raw.album === 'string') return raw.album;
+  if (raw.album && typeof raw.album === 'object' && typeof raw.album.title === 'string') return raw.album.title;
+  return undefined;
+}
+
+function albumIdOf(raw: TidalTrackRaw): string | undefined {
+  if (raw.albumId != null) return String(raw.albumId);
+  if (raw.album && typeof raw.album === 'object' && raw.album.id != null) return String(raw.album.id);
+  return undefined;
+}
+
+function normalizeTidalTrack(raw: TidalTrackRaw): Track {
+  const title = (raw.title ?? '').trim() || 'Без названия';
+  const artist = firstArtistName(raw) || 'Неизвестный артист';
+  return {
+    source: 'tidal',
+    id: String(raw.id),
+    title,
+    artist,
+    artistId: raw.artistId != null ? String(raw.artistId) : undefined,
+    album: albumTitleOf(raw),
+    albumId: albumIdOf(raw),
+    thumb: safeHttpUrl(raw.cover),
+    coverUrl: safeHttpUrl(raw.cover),
+    duration: typeof raw.duration === 'number' ? raw.duration : null,
+    verified: true,
+    permalink: `https://tidal.com/browse/track/${raw.id}`,
+    audioQuality: raw.audioQuality ?? null,
+    explicit: !!raw.explicit,
+    isOfficial: true,
+  };
+}
+
+function normalizeTidalAlbum(raw: TidalAlbumRaw): AlbumSet {
+  return {
+    id: String(raw.id),
+    title: (raw.title ?? '').trim() || 'Без названия',
+    artist: firstArtistName(raw) || '',
+    thumb: safeHttpUrl(raw.cover),
+    trackCount: typeof raw.numberOfTracks === 'number' ? raw.numberOfTracks : undefined,
+    kind: 'album',
+    source: 'tidal',
+  };
+}
+
+function normalizeTidalArtist(raw: TidalArtistRaw): ArtistSet {
+  return {
+    id: String(raw.id),
+    name: (raw.name ?? '').trim() || 'Неизвестный артист',
+    thumb: safeHttpUrl(raw.picture),
+    source: 'tidal',
+  };
+}
+
+export async function searchTidalTracks(q: string, limit = 30): Promise<Track[]> {
+  const data = await json<{ items?: TidalTrackRaw[] }>(
+    `${API_BASE}/tidal/search?q=${encodeURIComponent(q)}&limit=${limit}`,
   );
   return (data.items ?? []).map(normalizeTidalTrack);
 }
 
-export async function searchTidalAlbums(q: string): Promise<AlbumSet[]> {
-  const data = await json<{
-    items?: Array<{
-      id: string | number;
-      title?: string;
-      artist?: string;
-      artists?: string[];
-      cover?: string;
-      numberOfTracks?: number;
-    }>;
-  }>(`${API_BASE}/tidal/search/albums?q=${encodeURIComponent(q)}&limit=30`);
-  return (data.items ?? []).map((a) => ({
-    id: String(a.id),
-    title: (a.title ?? '').trim() || '(без названия)',
-    artist: (a.artist ?? a.artists?.[0] ?? '').trim(),
-    thumb: a.cover ?? '',
-    trackCount: typeof a.numberOfTracks === 'number' ? a.numberOfTracks : 0,
-    kind: 'album' as const,
-    source: 'tidal' as const,
-  }));
+export async function searchTidalAlbums(q: string, limit = 30): Promise<AlbumSet[]> {
+  const data = await json<{ items?: TidalAlbumRaw[] }>(
+    `${API_BASE}/tidal/search/albums?q=${encodeURIComponent(q)}&limit=${limit}`,
+  );
+  return (data.items ?? []).map(normalizeTidalAlbum);
 }
 
-export async function searchTidalArtists(q: string): Promise<ArtistSet[]> {
-  const data = await json<{
-    items?: Array<{ id: string | number; name?: string; picture?: string }>;
-  }>(`${API_BASE}/tidal/search/artists?q=${encodeURIComponent(q)}&limit=30`);
-  return (data.items ?? []).map((a) => ({
-    id: String(a.id),
-    name: (a.name ?? '').trim() || '(без имени)',
-    thumb: a.picture ?? '',
-    source: 'tidal' as const,
-  }));
+export async function searchTidalArtists(q: string, limit = 30): Promise<ArtistSet[]> {
+  const data = await json<{ items?: TidalArtistRaw[] }>(
+    `${API_BASE}/tidal/search/artists?q=${encodeURIComponent(q)}&limit=${limit}`,
+  );
+  return (data.items ?? []).map(normalizeTidalArtist);
 }
 
-export async function fetchTidalAlbum(id: string): Promise<{ album: AlbumSet; tracks: Track[] }> {
-  const data = await json<{
-    album: {
-      id: string | number;
-      title?: string;
-      artist?: string;
-      cover?: string;
-      numberOfTracks?: number;
-    };
-    tracks: TidalSearchRaw['items'];
-  }>(`${API_BASE}/tidal/album?id=${encodeURIComponent(id)}`);
+export async function fetchTidalAlbum(
+  id: string,
+): Promise<{ album: AlbumSet; tracks: Track[] }> {
+  const data = await json<{ album: TidalAlbumRaw; tracks?: TidalTrackRaw[] }>(
+    `${API_BASE}/tidal/album?id=${encodeURIComponent(id)}`,
+  );
   return {
-    album: {
-      id: String(data.album.id),
-      title: data.album.title ?? 'Альбом',
-      artist: data.album.artist ?? '',
-      thumb: data.album.cover ?? '',
-      trackCount: data.album.numberOfTracks ?? 0,
-      kind: 'album',
-      source: 'tidal',
-    },
+    album: normalizeTidalAlbum(data.album),
     tracks: (data.tracks ?? []).map(normalizeTidalTrack),
   };
 }
@@ -116,55 +166,18 @@ export async function fetchTidalArtist(id: string): Promise<{
   albums: AlbumSet[];
 }> {
   const data = await json<{
-    artist: { id: string | number; name?: string; picture?: string };
-    topTracks?: TidalSearchRaw['items'];
-    albums?: Array<{
-      id: string | number;
-      title?: string;
-      artist?: string;
-      cover?: string;
-      numberOfTracks?: number;
-    }>;
+    artist: TidalArtistRaw;
+    topTracks?: TidalTrackRaw[];
+    albums?: TidalAlbumRaw[];
   }>(`${API_BASE}/tidal/artist?id=${encodeURIComponent(id)}`);
   return {
-    artist: {
-      id: String(data.artist.id),
-      name: data.artist.name ?? '',
-      thumb: data.artist.picture ?? '',
-      source: 'tidal',
-    },
+    artist: normalizeTidalArtist(data.artist),
     topTracks: (data.topTracks ?? []).map(normalizeTidalTrack),
-    albums: (data.albums ?? []).map((a) => ({
-      id: String(a.id),
-      title: a.title ?? '(без названия)',
-      artist: a.artist ?? '',
-      thumb: a.cover ?? '',
-      trackCount: a.numberOfTracks ?? 0,
-      kind: 'album',
-      source: 'tidal',
-    })),
+    albums: (data.albums ?? []).map(normalizeTidalAlbum),
   };
 }
 
-function normalizeTidalTrack(it: NonNullable<TidalSearchRaw['items']>[number]): Track {
-  return {
-    source: 'tidal',
-    id: String(it.id),
-    title: (it.title ?? '').trim() || '(без названия)',
-    artist: it.artist ?? it.artists?.[0] ?? 'Tidal',
-    artistId: it.artistId != null ? String(it.artistId) : undefined,
-    albumId: it.albumId != null ? String(it.albumId) : undefined,
-    album: it.album,
-    thumb: it.cover,
-    duration: typeof it.duration === 'number' ? it.duration : null,
-    verified: true,
-    permalink: `https://tidal.com/browse/track/${it.id}`,
-    audioQuality: it.audioQuality ?? null,
-    explicit: !!it.explicit,
-  };
-}
-
-// -------------------------------------------------------------- SoundCloud
+// ----- SoundCloud ---------------------------------------------------------
 
 interface SoundCloudTrackRaw {
   id: number | string;
@@ -177,33 +190,38 @@ interface SoundCloudTrackRaw {
   media?: { transcodings?: Array<{ url: string; format?: { mime_type?: string } }> };
 }
 
-export async function searchSoundCloudTracks(q: string): Promise<Track[]> {
+export async function searchSoundCloudTracks(q: string, limit = 30): Promise<Track[]> {
   const data = await json<{ collection?: SoundCloudTrackRaw[] }>(
-    `${API_BASE}/sc/tracks?q=${encodeURIComponent(q)}&limit=30`
+    `${API_BASE}/sc/tracks?q=${encodeURIComponent(q)}&limit=${limit}`,
   );
-  return (data.collection ?? []).filter((t) => !!t && !!t.media).map((t) => {
-    let thumb = t.artwork_url ?? t.user?.avatar_url ?? '';
-    if (thumb) thumb = thumb.replace(/-large(\.[a-z]+)$/i, '-t300x300$1');
-    return {
-      source: 'soundcloud',
-      id: String(t.id),
-      urn: t.urn,
-      title: (t.title ?? '').trim() || '(без названия)',
-      artist: (t.user?.username ?? '').trim() || 'SoundCloud',
-      thumb,
-      duration: typeof t.duration === 'number' ? Math.round(t.duration / 1000) : null,
-      verified: !!t.user?.verified,
-      permalink: t.permalink_url,
-      transcoding: t.media?.transcodings?.find((tc) =>
-        (tc.format?.mime_type ?? '').includes('mpegurl')
-      ) ?? t.media?.transcodings?.[0],
-    } satisfies Track;
-  });
+  return (data.collection ?? [])
+    .filter((t) => !!t && !!t.media)
+    .map((t) => {
+      let thumb = t.artwork_url ?? t.user?.avatar_url ?? '';
+      if (thumb) thumb = thumb.replace(/-large(\.[a-z]+)$/i, '-t300x300$1');
+      return {
+        source: 'soundcloud',
+        id: String(t.id),
+        urn: t.urn,
+        title: (t.title ?? '').trim() || 'Без названия',
+        artist: (t.user?.username ?? '').trim() || 'SoundCloud',
+        thumb: safeHttpUrl(thumb),
+        coverUrl: safeHttpUrl(thumb),
+        duration: typeof t.duration === 'number' ? Math.round(t.duration / 1000) : null,
+        verified: !!t.user?.verified,
+        permalink: t.permalink_url,
+        isOfficial: !!t.user?.verified,
+        transcoding:
+          t.media?.transcodings?.find((tc) =>
+            (tc.format?.mime_type ?? '').includes('mpegurl'),
+          ) ?? t.media?.transcodings?.[0],
+      } satisfies Track;
+    });
 }
 
 export async function resolveSoundCloudStream(transcodingUrl: string): Promise<string> {
   const data = await json<{ url?: string }>(
-    `${API_BASE}/resolve?url=${encodeURIComponent(transcodingUrl)}`
+    `${API_BASE}/resolve?url=${encodeURIComponent(transcodingUrl)}`,
   );
   if (!data.url) throw new Error('no stream url');
   return data.url;

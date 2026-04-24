@@ -1,14 +1,42 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b0b0c" />
+    <meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="color-scheme" content="dark light" />
     <meta name="description" content="БРАТАН-музончик — минималистичный музыкальный плеер" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="БРАТАН" />
     <link rel="icon" type="image/svg+xml" href="/BRATAN-muzonchik/favicon.svg" />
+    <link rel="apple-touch-icon" href="/BRATAN-muzonchik/icon.svg" />
     <title>БРАТАН-музончик</title>
+    <script>
+      // Early theme bootstrap — runs before React mounts so there is no FOUC
+      // between a dark background paint and a light theme being applied.
+      (function () {
+        try {
+          var saved = localStorage.getItem('bratan.theme');
+          var theme =
+            saved === 'light' || saved === 'dark'
+              ? saved
+              : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)
+                ? 'light'
+                : 'dark';
+          document.documentElement.setAttribute('data-theme', theme);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', theme === 'light' ? '#ffffff' : '#0a0a0b');
+        } catch (e) {
+          // localStorage can throw in some privacy modes; fall back to dark.
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
   </head>
-  <body class="bg-bg-base text-fg-base antialiased">
+  <body class="bg-background text-foreground antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

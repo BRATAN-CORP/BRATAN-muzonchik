@@ -1,90 +1,152 @@
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import TiltedCard from '@/components/reactbits/TiltedCard';
-import { IconLibrary, IconSearch } from '@/components/icons';
+import { motion, useReducedMotion } from 'framer-motion';
+import { Library, Search, Sliders, Waves } from 'lucide-react';
+import { PaywallBanner } from '@/components/PaywallBanner';
+import { Section } from '@/components/Section';
+import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/cn';
 
-// The landing page leans on negative space + typography + the TiltedCard
-// hero from react-bits. Exactly one accent touch (the brand dot).
+// Landing page — minimalist hero, one accent touch, a short value
+// prop grid and the paywall CTA (hidden once the user has an active
+// subscription).
 export function LandingPage() {
+  const prefersReduced = useReducedMotion();
+  const fade = prefersReduced
+    ? {}
+    : {
+        initial: { opacity: 0, y: 12 },
+        animate: { opacity: 1, y: 0 },
+        transition: { duration: 0.45, ease: [0.22, 0.61, 0.36, 1] as [number, number, number, number] },
+      };
+
   return (
-    <div className="px-5 md:px-10 pt-8 pb-24">
-      <section className="grid md:grid-cols-2 gap-10 items-center min-h-[68vh]">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.22, 0.61, 0.36, 1] }}
-          className="max-w-xl"
-        >
-          <div className="inline-flex items-center gap-2 rounded-full hairline px-3 py-1 text-xs text-fg-muted">
-            <span className="size-1.5 rounded-full bg-[color:var(--accent)]" /> Минимализм в музыке
+    <div className="flex flex-col gap-12 sm:gap-16">
+      <motion.section {...fade} className="grid lg:grid-cols-[1.1fr_1fr] gap-8 lg:gap-12 items-center">
+        <div className="max-w-xl">
+          <div className="inline-flex items-center gap-2 rounded-full hairline px-3 py-1 text-[11px] text-muted-foreground">
+            <span className="size-1.5 rounded-full bg-accent" aria-hidden />
+            Минимализм в музыке
           </div>
-          <h1 className="mt-5 text-4xl sm:text-5xl md:text-6xl font-semibold tracking-tight leading-[1.02] text-balance">
-            Музыка без шума.
-            <br />
-            Только то, что важно<span className="brand-dot" />
+          <h1 className="mt-5 text-[34px] leading-[1.05] sm:text-5xl lg:text-6xl font-semibold tracking-tight text-balance">
+            Музыка без шума.<br />
+            Только то, что важно<span className="brand-dot" aria-hidden />
           </h1>
-          <p className="mt-5 text-base md:text-lg text-fg-muted max-w-lg">
-            Плеер с единой графитовой палитрой, живыми анимациями и честным поиском —
-            Tidal, SoundCloud, YouTube. Ни одного лишнего цвета.
+          <p className="mt-5 max-w-lg text-[15px] sm:text-base text-muted-foreground">
+            Плеер с единой графитовой палитрой, живыми анимациями и честным поиском
+            по Tidal и SoundCloud. Один акцент, один шрифт, один дизайн-язык.
           </p>
-          <div className="mt-7 flex flex-wrap items-center gap-3">
+          <div className="mt-7 flex flex-wrap gap-3">
             <Link
-              to="/search/"
-              className="inline-flex h-11 items-center gap-2 rounded-full bg-fg-base px-6 text-[15px] font-medium text-bg-base transition-opacity hover:opacity-90"
+              to="/search"
+              className={cn(
+                'inline-flex h-11 items-center gap-2 rounded-md bg-primary px-6 text-[15px] font-medium text-primary-foreground',
+                'hover:opacity-90 transition-opacity',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+              )}
             >
-              <IconSearch size={16} /> Найти трек
+              <Search size={16} /> Найти трек
             </Link>
             <Link
               to="/library"
-              className="inline-flex h-11 items-center gap-2 rounded-full border border-border-strong px-6 text-[15px] font-medium text-fg-base transition-colors hover:bg-bg-overlay"
+              className={cn(
+                'inline-flex h-11 items-center gap-2 rounded-md border border-border bg-transparent px-6 text-[15px] font-medium',
+                'hover:bg-secondary transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+              )}
             >
-              <IconLibrary size={16} /> Библиотека
+              <Library size={16} /> Библиотека
             </Link>
           </div>
-          <div className="mt-8 flex items-center gap-6 text-xs text-fg-subtle">
-            <span>Tidal · SoundCloud · YouTube</span>
+          <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+            <span>Tidal · SoundCloud</span>
             <span>10-полосный EQ</span>
+            <span>Визуализатор звука</span>
             <span>Полный экран</span>
           </div>
-        </motion.div>
+        </div>
 
         <motion.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.55, delay: 0.05 }}
-          className="flex items-center justify-center"
+          {...fade}
+          transition={{ ...(fade.transition ?? {}), delay: prefersReduced ? 0 : 0.08 }}
+          className="relative aspect-square w-full max-w-[440px] mx-auto"
         >
-          <TiltedCard
-            imageSrc={`${import.meta.env.BASE_URL}hero-card.svg`}
-            altText="БРАТАН музончик"
-            captionText="БРАТАН · музончик"
-            containerHeight="min(60vmin, 420px)"
-            containerWidth="min(60vmin, 420px)"
-            imageHeight="min(60vmin, 420px)"
-            imageWidth="min(60vmin, 420px)"
-            rotateAmplitude={10}
-            scaleOnHover={1.06}
-            showMobileWarning={false}
-            showTooltip={true}
-            displayOverlayContent={false}
+          <div
+            aria-hidden
+            className="absolute inset-0 rounded-[32px] blur-3xl opacity-60"
+            style={{
+              background:
+                'radial-gradient(closest-side at 30% 30%, var(--accent), transparent 70%), radial-gradient(closest-side at 70% 70%, color-mix(in oklab, var(--accent) 50%, var(--foreground)), transparent 65%)',
+            }}
           />
+          <div className="relative h-full w-full overflow-hidden rounded-[32px] border border-border bg-card shadow-float">
+            <div
+              aria-hidden
+              className="absolute inset-0"
+              style={{
+                background:
+                  'linear-gradient(140deg, color-mix(in oklab, var(--accent) 24%, var(--card)) 0%, var(--card) 55%)',
+              }}
+            />
+            <div className="relative h-full w-full flex items-end p-6 sm:p-8">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                  Сейчас играет
+                </div>
+                <div className="mt-2 text-xl sm:text-2xl font-semibold tracking-tight">
+                  БРАТАН · музончик
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Монохромная обложка · графитовая шкала
+                </div>
+              </div>
+            </div>
+          </div>
         </motion.div>
-      </section>
+      </motion.section>
 
-      <section className="mt-16 grid sm:grid-cols-3 gap-4">
-        <Feature title="Один цвет" desc="Графитовая шкала и один акцент. Никаких радуг и ИИ-эстетики." />
-        <Feature title="Настоящий EQ" desc="10 полос, пресеты, сохранение своих. Работает поверх любого источника." />
-        <Feature title="Как в кино" desc="Полноэкранный плеер с монохромным свечением, что дышит в такт басу." />
-      </section>
+      <PaywallBanner />
+
+      <Section title="Зачем ещё один плеер" subtitle="Сфокусировано на звуке, а не на визуальном шуме.">
+        <div className="grid sm:grid-cols-3 gap-3">
+          <Feature
+            icon={<Waves size={16} />}
+            title="Настоящий звук"
+            desc="10-полосный Web Audio эквалайзер с пресетами и сохранением своих настроек."
+          />
+          <Feature
+            icon={<Sliders size={16} />}
+            title="Один дизайн-язык"
+            desc="Графитовая палитра и один акцент на всех поверхностях — ни одного случайного цвета."
+          />
+          <Feature
+            icon={<Search size={16} />}
+            title="Чистый поиск"
+            desc="Tidal и SoundCloud в одном интерфейсе, без рекламы и баннеров."
+          />
+        </div>
+      </Section>
     </div>
   );
 }
 
-function Feature({ title, desc }: { title: string; desc: string }) {
+function Feature({
+  icon,
+  title,
+  desc,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+}) {
   return (
-    <div className="hairline rounded-xl p-5 bg-bg-elevated">
-      <div className="text-sm font-semibold text-fg-base">{title}</div>
-      <p className="mt-2 text-sm text-fg-muted">{desc}</p>
-    </div>
+    <Card className="h-full">
+      <CardContent className="flex flex-col gap-2">
+        <div className="inline-flex size-8 items-center justify-center rounded-md border border-border text-foreground">
+          {icon}
+        </div>
+        <CardTitle className="mt-1 text-base">{title}</CardTitle>
+        <CardDescription>{desc}</CardDescription>
+      </CardContent>
+    </Card>
   );
 }
