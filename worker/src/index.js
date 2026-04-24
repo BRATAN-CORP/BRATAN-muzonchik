@@ -7,10 +7,6 @@ import {
   handleTidalTrack,
   handleTidalAudio,
   handleTidalDownload,
-  handleTidalAlbum,
-  handleTidalArtist,
-  handleTidalArtistsSearch,
-  handleTidalAlbumsSearch,
 } from "./tidal.js";
 import {
   handleTgLoginPoll,
@@ -18,7 +14,6 @@ import {
   handleTgStatus,
   handleTgSubscribe,
   handleTgPlaylist,
-  handleTgFeatured,
 } from "./tg.js";
 //
 // Endpoints:
@@ -58,7 +53,7 @@ let memoClientIdAt = 0;
 
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, OPTIONS",
   "access-control-allow-headers": "Content-Type, Range",
   "access-control-expose-headers": "Content-Length, Content-Type, Content-Range, Accept-Ranges",
   "access-control-max-age": "86400",
@@ -155,64 +150,6 @@ async function handleSearch(url, ctx) {
   return new Response(body, {
     status: resp.status,
     headers: { "content-type": "application/json; charset=utf-8", ...CORS_HEADERS },
-  });
-}
-
-// /sc/albums?q= и /sc/playlists?q= — общий SC-эндпоинт для наборов.
-async function handleScSets(url, ctx, kind /* "albums" | "playlists" */) {
-  const q = (url.searchParams.get("q") || "").trim();
-  const limit = Math.min(Number(url.searchParams.get("limit") || "30"), 50);
-  if (!q) return json({ error: "missing q" }, 400);
-  const resp = await withClientId(ctx, async (id) => {
-    const u = new URL(`${SC_ORIGIN}/search/${kind}`);
-    u.searchParams.set("q", q);
-    u.searchParams.set("client_id", id);
-    u.searchParams.set("limit", String(limit));
-    return fetch(u.toString(), { headers: { accept: "application/json" } });
-  });
-  const body = await resp.text();
-  return new Response(body, {
-    status: resp.status,
-    headers: { "content-type": "application/json; charset=utf-8", ...CORS_HEADERS },
-  });
-}
-
-// /sc/set?id=<playlist_or_album_id> — достать полный список треков набора.
-async function handleScSet(url, ctx) {
-  const id = (url.searchParams.get("id") || "").trim();
-  if (!/^\d+$/.test(id)) return json({ error: "bad id" }, 400);
-  const resp = await withClientId(ctx, async (cid) => {
-    const u = new URL(`${SC_ORIGIN}/playlists/${id}`);
-    u.searchParams.set("client_id", cid);
-    return fetch(u.toString(), { headers: { accept: "application/json" } });
-  });
-  if (!resp.ok) return json({ error: "sc set failed", status: resp.status }, 502);
-  const data = await resp.json();
-  const rawTracks = Array.isArray(data && data.tracks) ? data.tracks : [];
-  // SoundCloud возвращает трек-заглушки (только {id}) — подтягиваем недостающие пачками.
-  const missing = rawTracks.filter((t) => !t.title).map((t) => t.id);
-  const hydrated = { ...Object.fromEntries(rawTracks.filter((t) => t.title).map((t) => [t.id, t])) };
-  for (let i = 0; i < missing.length; i += 50) {
-    const ids = missing.slice(i, i + 50).join(",");
-    const chunk = await withClientId(ctx, async (cid) => {
-      const u = new URL(`${SC_ORIGIN}/tracks`);
-      u.searchParams.set("ids", ids);
-      u.searchParams.set("client_id", cid);
-      return fetch(u.toString(), { headers: { accept: "application/json" } });
-    });
-    if (!chunk.ok) continue;
-    const arr = await chunk.json().catch(() => []);
-    if (Array.isArray(arr)) for (const t of arr) if (t && t.id) hydrated[t.id] = t;
-  }
-  const fullTracks = rawTracks.map((t) => hydrated[t.id] || t).filter((t) => t && t.title);
-  return json({
-    id: data.id,
-    title: data.title,
-    user: data.user,
-    artwork_url: data.artwork_url,
-    set_type: data.set_type || null,
-    track_count: data.track_count || fullTracks.length,
-    tracks: fullTracks,
   });
 }
 
@@ -426,7 +363,7 @@ async function handleYtAudio(url, req) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...CORS_HEADERS } });
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...CORS_HEADERS, "access-control-allow-methods": "GET, POST, OPTIONS" } });
 
     try {
       let resp;
@@ -434,12 +371,6 @@ export default {
         resp = json({ ok: true, service: "bratan-muzonchik" });
       } else if (url.pathname === "/search") {
         resp = await handleSearch(url, ctx);
-      } else if (url.pathname === "/sc/albums") {
-        resp = await handleScSets(url, ctx, "albums");
-      } else if (url.pathname === "/sc/playlists") {
-        resp = await handleScSets(url, ctx, "playlists");
-      } else if (url.pathname === "/sc/set") {
-        resp = await handleScSet(url, ctx);
       } else if (url.pathname === "/resolve") {
         resp = await handleResolveTranscoding(url, ctx);
       } else if (url.pathname === "/hls") {
@@ -454,14 +385,6 @@ export default {
         resp = await handleTidalHealth(env, ctx);
       } else if (url.pathname === "/tidal/search") {
         resp = await handleTidalSearch(url, env, ctx);
-      } else if (url.pathname === "/tidal/search/artists") {
-        resp = await handleTidalArtistsSearch(url, env, ctx);
-      } else if (url.pathname === "/tidal/search/albums") {
-        resp = await handleTidalAlbumsSearch(url, env, ctx);
-      } else if (url.pathname === "/tidal/album") {
-        resp = await handleTidalAlbum(url, env, ctx);
-      } else if (url.pathname === "/tidal/artist") {
-        resp = await handleTidalArtist(url, env, ctx);
       } else if (url.pathname === "/tidal/track") {
         resp = await handleTidalTrack(url, env, ctx);
       } else if (url.pathname === "/tidal/audio") {
@@ -478,8 +401,6 @@ export default {
         resp = await handleTgSubscribe(url, request, env);
       } else if (url.pathname === "/tg/playlist") {
         resp = await handleTgPlaylist(url, request, env);
-      } else if (url.pathname === "/tg/featured") {
-        resp = await handleTgFeatured(url, request, env);
       } else {
         resp = json({ error: "not found" }, 404);
       }
