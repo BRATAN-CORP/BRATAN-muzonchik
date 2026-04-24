@@ -20,13 +20,19 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
       />
       <input
         ref={ref}
-        type="search"
+        type="text"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
         value={value}
         {...rest}
         className={cn(
-          'w-full h-11 pl-10 pr-10 rounded-full bg-input border border-border text-sm',
+          'w-full h-10 pl-10 pr-10 rounded-[8px] bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.1)] text-[13px]',
           'text-foreground placeholder:text-muted-foreground',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'transition-colors duration-150',
+          'hover:border-[rgba(255,255,255,0.2)]',
+          'focus-visible:outline-none focus-visible:border-accent',
           inputClassName,
         )}
       />

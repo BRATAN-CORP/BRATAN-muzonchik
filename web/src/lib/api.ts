@@ -1,7 +1,6 @@
-// Thin client over the Cloudflare Worker. All requests go through the
-// worker so secrets stay server-side — the frontend never touches a Tidal
-// or SoundCloud key. Each provider gets an adapter that normalizes the
-// response into our domain models from `./types`.
+// Thin client over the Cloudflare Worker. Secrets stay server-side — the
+// frontend never touches a Tidal / SoundCloud / YouTube key. Each provider
+// gets an adapter that normalizes the response into our domain models.
 
 import type { AlbumSet, ArtistSet, Track } from './types';
 import { safeHttpUrl } from './safe-url';
@@ -177,6 +176,21 @@ export async function fetchTidalArtist(id: string): Promise<{
   };
 }
 
+/** Resolve a Tidal track to a playable audio URL. The worker proxies
+ *  the actual stream under /tidal/audio?id=... — we return that URL here
+ *  instead of the JSON-only /tidal/track endpoint the UI used to point at. */
+export async function resolveTidalStream(id: string): Promise<string> {
+  // Verify the track is resolvable (worker returns 404 if it's not) and
+  // prefer the audio proxy URL for <audio src>. Keeping the check is cheap
+  // and gives us a crisp error instead of a silent black hole.
+  const data = await json<{ stream?: string }>(
+    `${API_BASE}/tidal/track?id=${encodeURIComponent(id)}`,
+  );
+  if (data.stream) return data.stream;
+  // Fallback: the /tidal/audio endpoint streams bytes directly.
+  return `${API_BASE}/tidal/audio?id=${encodeURIComponent(id)}`;
+}
+
 // ----- SoundCloud ---------------------------------------------------------
 
 interface SoundCloudTrackRaw {
@@ -191,8 +205,10 @@ interface SoundCloudTrackRaw {
 }
 
 export async function searchSoundCloudTracks(q: string, limit = 30): Promise<Track[]> {
+  // Worker exposes the SoundCloud search under `/search` (not `/sc/tracks`).
+  // That mismatch was the source of the 404 "not found" the UI showed.
   const data = await json<{ collection?: SoundCloudTrackRaw[] }>(
-    `${API_BASE}/sc/tracks?q=${encodeURIComponent(q)}&limit=${limit}`,
+    `${API_BASE}/search?q=${encodeURIComponent(q)}&limit=${limit}`,
   );
   return (data.collection ?? [])
     .filter((t) => !!t && !!t.media)
@@ -225,4 +241,56 @@ export async function resolveSoundCloudStream(transcodingUrl: string): Promise<s
   );
   if (!data.url) throw new Error('no stream url');
   return data.url;
+}
+
+// ----- YouTube ------------------------------------------------------------
+
+interface YouTubeVideoRaw {
+  id: string;
+  title?: string;
+  uploader?: string;
+  author?: string;
+  duration?: number | null;
+  thumbnail?: string;
+  cover?: string;
+}
+
+function normalizeYouTubeTrack(raw: YouTubeVideoRaw): Track {
+  const title = (raw.title ?? '').trim() || 'Без названия';
+  const artist = (raw.uploader ?? raw.author ?? '').trim() || 'YouTube';
+  const thumb = safeHttpUrl(raw.thumbnail ?? raw.cover);
+  return {
+    source: 'youtube',
+    id: String(raw.id),
+    title,
+    artist,
+    thumb,
+    coverUrl: thumb,
+    duration: typeof raw.duration === 'number' ? raw.duration : null,
+    verified: false,
+    permalink: `https://www.youtube.com/watch?v=${encodeURIComponent(raw.id)}`,
+    isOfficial: false,
+  };
+}
+
+export async function searchYouTubeTracks(q: string, limit = 30): Promise<Track[]> {
+  const data = await json<{ items?: YouTubeVideoRaw[] }>(
+    `${API_BASE}/yt/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  );
+  return (data.items ?? []).map(normalizeYouTubeTrack);
+}
+
+/** Resolve a YouTube video id to a playable audio URL via the worker. */
+export async function resolveYouTubeStream(id: string): Promise<string> {
+  const data = await json<{ audio?: { url?: string } | string; url?: string }>(
+    `${API_BASE}/yt/streams?id=${encodeURIComponent(id)}`,
+  );
+  const url =
+    typeof data.audio === 'string'
+      ? data.audio
+      : typeof data.audio === 'object' && data.audio?.url
+        ? data.audio.url
+        : data.url;
+  if (!url) throw new Error('no stream url');
+  return url;
 }

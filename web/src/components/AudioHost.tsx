@@ -6,11 +6,15 @@ import {
   readEqEnabled,
   readSelectedPreset,
 } from '@/lib/eq-presets';
-import { resolveSoundCloudStream, API_BASE } from '@/lib/api';
+import {
+  resolveSoundCloudStream,
+  resolveTidalStream,
+  resolveYouTubeStream,
+} from '@/lib/api';
 
 // Owns the single <audio> element and the Web Audio graph. Mounted once
-// in the AppShell so playback survives route changes — this component has
-// no visual output, it's just state wiring.
+// in the AppShell so playback survives route changes. No visual output —
+// this is state wiring only.
 
 export function AudioHost() {
   const ref = useRef<HTMLAudioElement | null>(null);
@@ -23,9 +27,9 @@ export function AudioHost() {
   const setTime = usePlayer((s) => s.setTime);
   const next = usePlayer((s) => s.next);
 
-  // Seed the graph (and apply persisted EQ) on first user gesture. We can't
-  // create an AudioContext before a gesture on iOS Safari without it
-  // immediately suspending.
+  // Seed the graph (and apply persisted EQ) on first user gesture. We
+  // can't create an AudioContext before a gesture on iOS Safari without
+  // it immediately suspending.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -53,12 +57,14 @@ export function AudioHost() {
       try {
         let src = '';
         if (current.source === 'tidal') {
-          src = `${API_BASE}/tidal/stream?id=${encodeURIComponent(current.id)}`;
+          src = await resolveTidalStream(current.id);
         } else if (current.source === 'soundcloud') {
           const tc = current.transcoding as { url?: string } | undefined;
           if (tc?.url) {
             src = await resolveSoundCloudStream(tc.url);
           }
+        } else if (current.source === 'youtube') {
+          src = await resolveYouTubeStream(current.id);
         }
         if (cancelled || !src) return;
         el.src = src;

@@ -2,9 +2,8 @@ import { NavLink } from 'react-router-dom';
 import { Home, Library, Search } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
-// Bottom tab bar for mobile. Sits above the mini-player on smaller
-// viewports; on lg+ we render the Sidebar instead so this component
-// returns null.
+// Bottom tab bar for mobile. Thin glass strip with Solar-weight
+// lucide-react icons (single stroke, 1.5 weight) — per DESIGN.md.
 export function MobileNav() {
   return (
     <nav
@@ -16,9 +15,9 @@ export function MobileNav() {
       )}
     >
       <div className="mx-auto max-w-xl grid grid-cols-3">
-        <Tab to="/" icon={<Home size={18} />} label="Главная" end />
-        <Tab to="/search" icon={<Search size={18} />} label="Поиск" />
-        <Tab to="/library" icon={<Library size={18} />} label="Библиотека" />
+        <Tab to="/" icon={<Home size={16} strokeWidth={1.5} />} label="Главная" end />
+        <Tab to="/search" icon={<Search size={16} strokeWidth={1.5} />} label="Поиск" />
+        <Tab to="/library" icon={<Library size={16} strokeWidth={1.5} />} label="Библиотека" />
       </div>
     </nav>
   );
@@ -42,13 +41,19 @@ function Tab({
       className={({ isActive }) =>
         cn(
           'flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-medium',
-          'transition-colors',
-          isActive ? 'text-foreground' : 'text-muted-foreground',
+          'transition-colors duration-150',
+          isActive ? 'text-accent' : 'text-muted-foreground hover:text-foreground',
         )
       }
     >
-      <span aria-hidden>{icon}</span>
-      {label}
+      {({ isActive }) => (
+        <>
+          <span aria-hidden className={cn(isActive && 'text-accent')}>
+            {icon}
+          </span>
+          <span>{label}</span>
+        </>
+      )}
     </NavLink>
   );
 }
