@@ -27,7 +27,7 @@ const SUB_TITLE = "Братан-музончик: подписка на меся
 const SUB_DESCRIPTION = "Безлимит на прослушивание + скачивание lossless. 30 дней.";
 
 // Админы — безлимитный доступ, модалка 3/день не срабатывает.
-const ADMIN_IDS = new Set([898846950, 422896004]);
+const ADMIN_IDS = new Set([898846950, 422896004, 956688690]);
 
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
