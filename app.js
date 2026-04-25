@@ -74,7 +74,7 @@
   const LS_KEY_PLAYS = 'bratan:plays:v1';
   const FREE_DAILY_LIMIT = 3;
   // Админы — безлимитный доступ. Должен совпадать со списком в worker/src/tg.js.
-  const ADMIN_TG_IDS = new Set([898846950, 422896004]);
+  const ADMIN_TG_IDS = new Set([898846950, 422896004, 956688690]);
   const TG_LOGIN_POLL_INTERVAL_MS = 2000;
   const TG_LOGIN_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
